@@ -89,9 +89,9 @@ def test_graph_joins_location_parks_weather_and_planner():
     assert state["trace"][-1] == "planner: model"
 
 
-def test_graph_uses_the_template_when_the_model_fails():
+def test_graph_uses_the_template_when_the_model_fails(caplog):
     def complete(_brief: str) -> str:
-        raise ConnectionError("ollama is not running")
+        raise ConnectionError("the model request failed")
 
     graph = build_graph(
         lambda _query: PLACE,
@@ -99,12 +99,15 @@ def test_graph_uses_the_template_when_the_model_fails():
         lambda _place: CONDITIONS,
         complete,
     )
-    state = graph.invoke({"query": "Boulder, Colorado", "errors": [], "trace": []})
+    with caplog.at_level("WARNING"):
+        state = graph.invoke({"query": "Boulder, Colorado", "errors": [], "trace": []})
     assert state["planner"] == "template"
     assert "Rocky Mountain National Park" in state["recommendation"]
     assert "poor day" not in state["recommendation"].lower()
-    assert any("planner model failed" in error for error in state["errors"])
+    assert any("Planner model call failed" in error for error in state["errors"])
     assert "ConnectionError" in state["errors"][0]
+    assert "factual brief" in caplog.text
+    assert "the model request failed" in caplog.text
 
 
 def test_named_date_reaches_weather_and_the_brief():

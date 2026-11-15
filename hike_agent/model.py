@@ -1,12 +1,12 @@
-"""Build the chat model named by ``MODEL_PROVIDER`` and ``MODEL_NAME``.
+"""OpenAI chat model used by the planner.
 
-The default is the existing local setup: Ollama model ``gpt-oss:20b``.
-Set ``MODEL_PROVIDER=openai`` to use the OpenAI API, or point
-``OPENAI_BASE_URL`` at another OpenAI-compatible server.
+``MODEL_NAME`` defaults to ``gpt-4.1-mini``. ``OPENAI_API_KEY`` is required.
+``OPENAI_BASE_URL`` is optional and points at an OpenAI-compatible host.
 """
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -14,39 +14,43 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from hike_agent.agents.planner import PLANNER_SYSTEM
 from hike_agent.config import Settings
 
+logger = logging.getLogger(__name__)
+
+
+def warn_model_failure(exc: BaseException) -> str:
+    """Log a warning and return the same text for the graph error list.
+
+    The planner still returns the factual brief. This warning is what makes
+    that fallback visible in the CLI and in the LangGraph server logs.
+    """
+
+    message = (
+        f"Planner model call failed ({type(exc).__name__}: {exc}). "
+        "Using the factual brief as the recommendation."
+    )
+    logger.warning(message)
+    if not logger.handlers and not logging.getLogger().handlers:
+        import sys
+
+        print(f"warning: {message}", file=sys.stderr)
+    return message
+
 
 def build_chat_model(settings: Settings) -> Any:
-    """Return a LangChain chat model. Raises if the provider is unknown or missing a key."""
+    """Return a ChatOpenAI client. Raises when ``OPENAI_API_KEY`` is missing."""
 
-    provider = settings.model_provider
-    if provider == "ollama":
-        import httpx
-        from langchain_ollama import ChatOllama
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set.")
+    from langchain_openai import ChatOpenAI
 
-        # Connect quickly when Ollama is not running; allow a local model time to answer.
-        timeout = httpx.Timeout(connect=3.0, read=90.0, write=10.0, pool=5.0)
-        return ChatOllama(
-            model=settings.model_name,
-            base_url=settings.ollama_base_url,
-            temperature=0,
-            sync_client_kwargs={"timeout": timeout},
-        )
-    if provider in {"openai", "openai-compatible"}:
-        if not settings.openai_api_key:
-            raise RuntimeError("OPENAI_API_KEY is not set.")
-        from langchain_openai import ChatOpenAI
-
-        kwargs: dict[str, Any] = {
-            "model": settings.model_name,
-            "temperature": 0,
-            "api_key": settings.openai_api_key,
-        }
-        if settings.openai_base_url:
-            kwargs["base_url"] = settings.openai_base_url
-        return ChatOpenAI(**kwargs)
-    raise RuntimeError(
-        f"Unsupported MODEL_PROVIDER {settings.model_provider!r}. Use 'ollama' or 'openai'."
-    )
+    kwargs: dict[str, Any] = {
+        "model": settings.model_name,
+        "temperature": 0,
+        "api_key": settings.openai_api_key,
+    }
+    if settings.openai_base_url:
+        kwargs["base_url"] = settings.openai_base_url
+    return ChatOpenAI(**kwargs)
 
 
 def _message_text(content: Any) -> str:
@@ -64,7 +68,10 @@ def _message_text(content: Any) -> str:
 
 
 def make_complete(settings: Settings):
-    """Return a function that asks the configured model to rewrite a factual brief."""
+    """Return a function that asks the OpenAI model to rewrite a factual brief."""
+
+    if not settings.openai_api_key:
+        raise RuntimeError("OPENAI_API_KEY is not set.")
 
     def complete(brief: str) -> str:
         model = build_chat_model(settings)

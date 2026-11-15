@@ -20,10 +20,11 @@ RUN ln -sf /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
 
 WORKDIR /app
 
+# OPENAI_API_KEY is required at runtime. Do not bake it into the image.
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    MODEL_PROVIDER=openai \
+    MODEL_NAME=gpt-4.1-mini \
     PORT=2024
 
 COPY requirements.txt pyproject.toml README.md langgraph.json main.py ./

@@ -2,7 +2,7 @@
 
 Multi-agent hike planner. You give it a place. A LangGraph runs a location agent, then a parks agent and a weather agent together, then a planner that writes a short recommendation and keeps the safety notes.
 
-The default model is still local Ollama `gpt-oss:20b`. Set `MODEL_PROVIDER=openai` to use the OpenAI API, or set `OPENAI_BASE_URL` for another OpenAI-compatible server.
+The planner calls the OpenAI API. `OPENAI_API_KEY` is required. The model defaults to `gpt-4.1-mini` (`MODEL_NAME`). Set `OPENAI_BASE_URL` only for another OpenAI-compatible host. If that call fails, the process logs a warning and the factual brief is the recommendation.
 
 ## Why a graph, not a routing model
 
@@ -60,11 +60,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-For the original model:
-
-```bash
-ollama pull gpt-oss:20b
-```
+Put an OpenAI key in `.env` as `OPENAI_API_KEY`. The planner does not run a local model.
 
 Weather MCP needs Node.js on `PATH` when `WEATHER_MCP_ENABLED` is true. The parks MCP URL is hosted HTTP and does not need Node. The first `npx` launch downloads the weather server; if that exceeds `WEATHER_MCP_TIMEOUT_SECONDS`, the Open-Meteo fallback runs.
 
@@ -111,10 +107,8 @@ Copy `.env.example`. Do not commit a filled-in `.env`.
 
 | Variable | Purpose |
 | --- | --- |
-| `MODEL_PROVIDER` | `ollama` (default) or `openai` |
-| `MODEL_NAME` | Default `gpt-oss:20b` |
-| `OLLAMA_BASE_URL` | Default `http://127.0.0.1:11434` |
-| `OPENAI_API_KEY` | Required when `MODEL_PROVIDER=openai` |
+| `OPENAI_API_KEY` | Required. The planner calls the OpenAI API |
+| `MODEL_NAME` | Default `gpt-4.1-mini` |
 | `OPENAI_BASE_URL` | Optional base URL for an OpenAI-compatible server |
 | `NPS_API_KEY` | Starts the local NPS MCP server and, if that fails, calls the NPS REST API |
 | `NPS_MCP_COMMAND`, `NPS_MCP_ARGS` | How the local NPS MCP process is started. Ignored when `NPS_API_KEY` is empty |
@@ -143,7 +137,7 @@ hike_agent/
   chat_graph.py     messages graph for the chat UI
   http_app.py       GET /health for the LangGraph server
   extract.py        place and date from a chat message
-  model.py          Ollama or OpenAI chat model
+  model.py          OpenAI chat model
   mcp_bridge.py     MCPAdapter tool calls
   agents/           location, parks, weather, planner
   services/         direct HTTP clients
@@ -166,14 +160,14 @@ Two services from this repo. Do not use `langgraph up`. That command builds the 
 
 The backend image also installs Node 22. The weather MCP server, and the local NPS MCP server when `NPS_API_KEY` is set, start with `npx`. If that process fails, the agents fall back to Open-Meteo, `api.weather.gov`, the NPS REST API, and OpenStreetMap.
 
-The Python default for `MODEL_PROVIDER` stays `ollama`, so a laptop still uses local GPT-OSS. The backend image sets `MODEL_PROVIDER=openai`. Set `OPENAI_API_KEY` on the Railway backend service. Without that key the planner still answers, using the factual brief instead of a model.
+The planner uses OpenAI. `MODEL_NAME` defaults to `gpt-4.1-mini` in code and in the backend image. `OPENAI_API_KEY` is required on the Railway backend service and is not baked into the image. If the model call fails, the server logs a warning and the recommendation is the factual brief.
 
 **Backend service**
 
 - Name it `hike-api`. The frontend reference below uses that name.
 - Root directory: repository root.
 - Builder: Dockerfile (`railway.toml` sets the healthcheck to `/health`).
-- Variables: `OPENAI_API_KEY`, and `NPS_API_KEY` if you want National Park Service data. `MODEL_PROVIDER=openai` is already in the image. Leave `OLLAMA_BASE_URL` unset.
+- Variables: `OPENAI_API_KEY` (required), and `NPS_API_KEY` if you want National Park Service data. `MODEL_NAME=gpt-4.1-mini` is already in the image.
 
 **Frontend service**
 

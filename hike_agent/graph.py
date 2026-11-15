@@ -19,6 +19,7 @@ from hike_agent.agents.location import resolve_place as default_resolve_place
 from hike_agent.agents.parks import find_hikes as default_find_hikes
 from hike_agent.agents.planner import render_brief, safety_footer
 from hike_agent.agents.weather import hiking_conditions as default_hiking_conditions
+from hike_agent.model import warn_model_failure
 from hike_agent.state import HikeState
 
 Complete = Callable[[str], str]
@@ -94,10 +95,11 @@ def build_graph(
             if not text:
                 raise RuntimeError("the model returned an empty recommendation")
         except Exception as exc:  # noqa: BLE001 - template output is the safe fallback
+            warning = warn_model_failure(exc)
             return {
                 "recommendation": brief,
                 "planner": "template",
-                "errors": [f"planner model failed: {type(exc).__name__}: {exc}"],
+                "errors": [warning],
                 "trace": ["planner: template after model error"],
             }
         footer = safety_footer(state)

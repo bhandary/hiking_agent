@@ -10,7 +10,7 @@ from typing import Any
 from hike_agent.config import get_settings
 from hike_agent.extract import extract_hike_request
 from hike_agent.graph import build_graph
-from hike_agent.model import make_complete
+from hike_agent.model import make_complete, warn_model_failure
 
 
 def plan_hike(query: str, *, complete=None, settings=None, when=None) -> dict[str, Any]:
@@ -21,7 +21,7 @@ def plan_hike(query: str, *, complete=None, settings=None, when=None) -> dict[st
         try:
             complete = make_complete(settings)
         except Exception as exc:  # noqa: BLE001
-            print(f"Model setup skipped: {exc}", file=sys.stderr)
+            warn_model_failure(exc)
             complete = None
     graph = build_graph(complete=complete)
     return graph.invoke({"query": query, "when": when or {}, "errors": [], "trace": []})
@@ -82,7 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         complete = make_complete(settings)
     except Exception as exc:  # noqa: BLE001
-        print(f"Model setup skipped: {exc}", file=sys.stderr)
+        warn_model_failure(exc)
 
     extracted = extract_hike_request(args.place)
     try:

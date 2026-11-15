@@ -24,9 +24,7 @@ def _float(name: str, default: float) -> float:
 class Settings:
     """Everything the agents need, with no secrets stored in code."""
 
-    model_provider: str
     model_name: str
-    ollama_base_url: str
     openai_api_key: str
     openai_base_url: str
     nps_api_key: str
@@ -58,9 +56,7 @@ def get_settings() -> Settings:
         "-y,@cyanheads/national-parks-mcp-server@0.3.0",
     )
     return Settings(
-        model_provider=os.environ.get("MODEL_PROVIDER", "ollama").strip().lower(),
-        model_name=os.environ.get("MODEL_NAME", "gpt-oss:20b").strip(),
-        ollama_base_url=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").strip(),
+        model_name=os.environ.get("MODEL_NAME", "").strip() or "gpt-4.1-mini",
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
         openai_base_url=os.environ.get("OPENAI_BASE_URL", "").strip(),
         nps_api_key=os.environ.get("NPS_API_KEY", "").strip(),

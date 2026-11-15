@@ -89,13 +89,21 @@ def test_resolve_place_tool_is_a_langchain_tool():
     assert "coordinates" in resolve_place_tool.description
 
 
+def test_model_name_defaults_to_gpt_4_1_mini(monkeypatch):
+    monkeypatch.delenv("MODEL_NAME", raising=False)
+    assert get_settings().model_name == "gpt-4.1-mini"
+
+
+def test_blank_model_name_uses_gpt_4_1_mini(monkeypatch):
+    monkeypatch.setenv("MODEL_NAME", "  ")
+    assert get_settings().model_name == "gpt-4.1-mini"
+
+
 def test_settings_read_model_and_keys_from_the_environment(monkeypatch):
-    monkeypatch.setenv("MODEL_PROVIDER", "openai")
-    monkeypatch.setenv("MODEL_NAME", "gpt-4.1-mini")
+    monkeypatch.setenv("MODEL_NAME", "gpt-4.1")
     monkeypatch.setenv("NPS_API_KEY", "test-key")
     monkeypatch.setenv("NPS_MCP_ENABLED", "false")
     loaded = get_settings()
-    assert loaded.model_provider == "openai"
-    assert loaded.model_name == "gpt-4.1-mini"
+    assert loaded.model_name == "gpt-4.1"
     assert loaded.nps_api_key == "test-key"
     assert loaded.nps_mcp_enabled is False

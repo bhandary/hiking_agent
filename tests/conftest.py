@@ -14,9 +14,7 @@ warnings.filterwarnings("ignore", message=".*langchain.mcp.*")
 @pytest.fixture
 def settings() -> Settings:
     return Settings(
-        model_provider="ollama",
-        model_name="gpt-oss:20b",
-        ollama_base_url="http://127.0.0.1:11434",
+        model_name="gpt-4.1-mini",
         openai_api_key="",
         openai_base_url="",
         nps_api_key="",
