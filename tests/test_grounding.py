@@ -3,7 +3,13 @@
 import copy
 from datetime import date
 
-from hike_agent.agents.planner import PLANNER_SYSTEM, ground_recommendation, invented_place_names, render_brief
+from hike_agent.agents.planner import (
+    PLANNER_SYSTEM,
+    _verbatim_in_tools,
+    ground_recommendation,
+    invented_place_names,
+    render_brief,
+)
 from hike_agent.cli import answer_follow_up, plan_hike
 from hike_agent.coordinates import parse_coordinates
 from hike_agent.extract import INVALID_DATE, extract_hike_request
@@ -109,6 +115,52 @@ def test_a_slice_of_a_longer_tool_number_is_not_grounded():
     )
     assert how == "model"
     assert "4.9 F" in accepted
+
+
+def test_a_signed_temperature_is_not_the_unsigned_number():
+    minus = "\u2212"
+    assert _verbatim_in_tools("5 F", "-5 F") is False
+    assert _verbatim_in_tools("5.5 F", "-5.5 F") is False
+    assert _verbatim_in_tools("5 F", "+5 F") is False
+    assert _verbatim_in_tools("5 F", f"{minus}5 F") is False
+    assert _verbatim_in_tools("5.5 F", f"{minus}5.5 F") is False
+    assert _verbatim_in_tools("-5 F", "5 F") is False
+    assert _verbatim_in_tools("-5.5 F", "5.5 F") is False
+    assert _verbatim_in_tools("-5 F", "-5 F") is True
+    assert _verbatim_in_tools("-5.5 F", "-5.5 F") is True
+    assert _verbatim_in_tools("45 F", "40-45 F") is True
+    assert _verbatim_in_tools("45 F", f"40{minus}45 F") is True
+    assert _verbatim_in_tools("5 F", "40-45 F") is False
+
+    def check(summary: str, text: str) -> tuple[str, str]:
+        state = copy.deepcopy(STATE)
+        state["conditions"]["summary"] = summary
+        state["conditions"]["safety_notes"] = []
+        return ground_recommendation(text, state, lambda _prompt: text)
+
+    dropped, how = check("-5 F", "It will be 5 F. Hike Bear Lake Trail.")
+    assert how == "grounded"
+    assert "It will be 5 F." not in dropped
+
+    dropped, how = check("-5.5 F", "It will be 5.5 F. Hike Bear Lake Trail.")
+    assert how == "grounded"
+    assert "It will be 5.5 F." not in dropped
+
+    dropped, how = check("5 F", "It will be -5 F. Hike Bear Lake Trail.")
+    assert how == "grounded"
+    assert "It will be -5 F." not in dropped
+
+    kept, how = check("-5 F", "It will be -5 F. Hike Bear Lake Trail.")
+    assert how == "model"
+    assert "-5 F" in kept
+
+    kept, how = check("-5.5 F", "It will be -5.5 F. Hike Bear Lake Trail.")
+    assert how == "model"
+    assert "-5.5 F" in kept
+
+    kept, how = check("40-45 F", "It will be 45 F. Hike Bear Lake Trail.")
+    assert how == "model"
+    assert "45 F" in kept
 
 
 def test_numbers_and_dates_copied_from_tool_results_are_kept():

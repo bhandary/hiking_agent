@@ -551,8 +551,19 @@ def _verbatim_in_tools(spoken: str, facts: str) -> bool:
         start = index + 1
 
 
+# ASCII plus, ASCII hyphen-minus, and the unicode minus (U+2212).
+_NUMBER_SIGNS = "+-\u2212"
+
+
 def _number_is_bounded(text: str, start: int, end: int) -> bool:
-    """No digit, or a decimal that continues a number, touches this match."""
+    """No digit, decimal continuation, or leading sign touches this match.
+
+    A hyphen with a digit on its left is a range, not a sign. Claim ``45 F``
+    against tool text ``40-45 F`` is the high end of that range: a digit
+    precedes the ``-``, so the match is accepted. Claim ``5 F`` against
+    ``-5 F`` has no digit before the sign, so it is rejected. The same rule
+    applies to ``+`` and the unicode minus.
+    """
 
     before = text[start - 1] if start > 0 else ""
     after = text[end] if end < len(text) else ""
@@ -560,6 +571,10 @@ def _number_is_bounded(text: str, start: int, end: int) -> bool:
         return False
     starts_digit = start < len(text) and text[start].isdigit()
     ends_digit = end > 0 and text[end - 1].isdigit()
+    if before in _NUMBER_SIGNS and starts_digit:
+        preceded_by_digit = start > 1 and text[start - 2].isdigit()
+        if not preceded_by_digit:
+            return False
     if before == "." and starts_digit:
         return False
     if before == "," and starts_digit and start > 1 and text[start - 2].isdigit():
