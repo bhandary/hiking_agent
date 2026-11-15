@@ -66,7 +66,12 @@ def build_graph(
         except TypeError:
             place = resolve_place(query)
         if place.get("latitude") is None or place.get("longitude") is None:
-            message = NEED_LOCATION if place.get("source") == "needs-location" else COULD_NOT_FIND
+            if place.get("source") == "needs-location":
+                message = NEED_LOCATION
+            elif place.get("source") == "error":
+                message = place.get("note") or "Location lookup failed."
+            else:
+                message = COULD_NOT_FIND
             return {
                 "place": place,
                 "recommendation": message,

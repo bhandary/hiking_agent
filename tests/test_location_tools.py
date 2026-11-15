@@ -52,6 +52,7 @@ def test_geocoder_failure_is_reported(settings):
 
     place = resolve_place("Boulder", settings=settings, get_json=get_json)
     assert place["latitude"] is None
+    assert place["source"] == "error"
     assert "TimeoutError" in place["note"]
 
 

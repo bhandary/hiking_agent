@@ -116,7 +116,7 @@ def resolve_place(
             user_agent=settings.user_agent,
         )
     except Exception as exc:  # noqa: BLE001
-        return _empty(text, f"Geocoding failed ({type(exc).__name__}).")
+        return _empty(text, f"Geocoding failed ({type(exc).__name__}).", source="error")
     results = payload.get("results") if isinstance(payload, dict) else None
     for hit in results or []:
         if hit.get("latitude") is None or hit.get("longitude") is None:
