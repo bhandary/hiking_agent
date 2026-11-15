@@ -76,18 +76,22 @@ def _trip_length(raw: str) -> str:
     return "overnight"
 
 
+def _clean_place(value: str) -> str:
+    return value.strip(" ?!.,;:")
+
+
 def _place(raw: str) -> str:
     trimmed = _strip_scheduling(raw)
     trimmed = _LEAD.sub("", trimmed).strip()
-    trimmed = trimmed.strip(" ?.,")
+    trimmed = _clean_place(trimmed)
     for prep in ("near", "around"):
         match = re.search(rf"\b{prep}\s+(.+)$", trimmed, re.IGNORECASE)
         if match:
-            return match.group(1).strip(" ?.,")
+            return _clean_place(match.group(1))
     match = re.search(r"\bin\s+(.+)$", trimmed, re.IGNORECASE)
     if match:
-        return match.group(1).strip(" ?.,")
-    return trimmed or raw.strip(" ?.")
+        return _clean_place(match.group(1))
+    return trimmed or _clean_place(raw)
 
 
 def _strip_scheduling(raw: str) -> str:
