@@ -24,9 +24,68 @@ Rules:
 - Include the forecast summary from the brief word for word.
 """
 
-_PLACE_NAME = re.compile(
-    r"\b([A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*){0,6}\s+(?:Trail|Park|Path|Loop|Canyon|Peak|Lake|Ridge|Wilderness|Monument|Creek|Mountain))\b"
+_SUFFIX_WORD = re.compile(
+    r"\b(Trail|Park|Path|Loop|Canyon|Peak|Lake|Ridge|Wilderness|Monument|Creek|Mountain)\b",
+    re.IGNORECASE,
 )
+_PREV_WORD = re.compile(r"([A-Za-z][\w'’.-]*)\s+$")
+# Words that can sit inside a place name. "and" starts a second name, so it stops the walk.
+_CONNECTORS = frozenset({"of", "the", "de", "la", "del", "du"})
+_WALK_STOP = frozenset({
+    "a",
+    "an",
+    "and",
+    "are",
+    "around",
+    "at",
+    "be",
+    "best",
+    "by",
+    "for",
+    "from",
+    "hike",
+    "hikes",
+    "hiking",
+    "in",
+    "is",
+    "near",
+    "on",
+    "or",
+    "see",
+    "take",
+    "then",
+    "to",
+    "try",
+    "via",
+    "visit",
+    "walk",
+    "was",
+    "with",
+})
+_GENERIC = frozenset({
+    "area",
+    "canyon",
+    "creek",
+    "forest",
+    "lake",
+    "loop",
+    "monument",
+    "mount",
+    "mountain",
+    "mt",
+    "national",
+    "park",
+    "parks",
+    "path",
+    "paths",
+    "peak",
+    "point",
+    "ridge",
+    "state",
+    "trail",
+    "trails",
+    "wilderness",
+})
 
 
 def _nps_verified(park: dict[str, Any], report: dict[str, Any]) -> bool:
@@ -121,13 +180,58 @@ def allowed_place_names(state: dict[str, Any]) -> list[str]:
     return names
 
 
+def _tokens(name: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", name.lower())
+
+
+def _distinctive(tokens: list[str]) -> list[str]:
+    return [token for token in tokens if token not in _GENERIC and token not in _CONNECTORS]
+
+
+def _place_candidates(text: str) -> list[str]:
+    """Place-like phrases, without the sentence words that sit in front of them."""
+
+    names: list[str] = []
+    for match in _SUFFIX_WORD.finditer(text or ""):
+        words = [match.group(1)]
+        cursor = match.start()
+        for _ in range(6):
+            previous = _PREV_WORD.search(text[:cursor])
+            if not previous:
+                break
+            word = previous.group(1)
+            lowered = word.lower()
+            if lowered in _CONNECTORS:
+                words.append(word)
+                cursor = previous.start()
+                continue
+            if lowered in _WALK_STOP:
+                break
+            words.append(word)
+            cursor = previous.start()
+        words.reverse()
+        while len(words) > 1 and words[0].lower() in _CONNECTORS:
+            words.pop(0)
+        name = " ".join(words).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 def invented_place_names(text: str, state: dict[str, Any]) -> list[str]:
-    """Park or trail names in ``text`` that no tool returned."""
+    """Park or trail names in ``text`` that no tool returned.
+
+    A name with no capital letter is left for a later check. This pass only
+    stops a capitalized invented name that merely contains a real trail.
+    """
 
     allowed = allowed_place_names(state)
     invented: list[str] = []
-    for match in _PLACE_NAME.finditer(text or ""):
-        name = match.group(1).strip()
+    for name in _place_candidates(text):
+        if not any(character.isupper() for character in name):
+            continue
+        if not _distinctive(_tokens(name)):
+            continue
         if name not in invented and not _name_allowed(name, allowed):
             invented.append(name)
     return invented
@@ -179,10 +283,24 @@ def _with_forecast_and_length(text: str, state: dict[str, Any], summary: str) ->
 
 
 def _name_allowed(candidate: str, allowed: list[str]) -> bool:
-    cand = candidate.lower()
+    """True when every token of ``candidate`` belongs to one looked-up name.
+
+    A longer invented name that merely contains a real trail, such as
+    ``Imaginary Bear Lake Trail``, is not allowed. A shorter real form, such as
+    ``Bear Lake`` for ``Bear Lake Trail``, is.
+    """
+
+    tokens = _tokens(candidate)
+    distinctive = _distinctive(tokens)
+    if not tokens or not distinctive:
+        return True
     for name in allowed:
-        other = name.lower()
-        if cand == other or cand in other or other in cand:
+        other = _tokens(name)
+        if not other:
+            continue
+        if tokens == other:
+            return True
+        if all(token in other for token in tokens) and any(token in other for token in distinctive):
             return True
     return False
 

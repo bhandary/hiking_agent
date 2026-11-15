@@ -210,3 +210,15 @@ def test_invented_parks_are_replaced_with_tool_results():
     assert "Rocky Mountain National Park" in state["recommendation"]
     assert "Partly cloudy" in state["recommendation"]
     assert state["planner"] == "grounded"
+
+
+def test_a_real_trail_name_with_an_invented_prefix_is_rejected():
+    def complete(_brief: str) -> str:
+        return "Sunrise is best from Imaginary Bear Lake Trail."
+
+    graph = build_graph(lambda _query: PLACE, lambda _place: PARKS, lambda _place: CONDITIONS, complete)
+    state = graph.invoke({"query": "Boulder", "errors": [], "trace": []})
+    assert "Imaginary Bear Lake Trail" not in state["recommendation"]
+    assert "Bear Lake Trail" in state["recommendation"]
+    assert "Partly cloudy" in state["recommendation"]
+    assert state["planner"] == "grounded"
