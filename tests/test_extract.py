@@ -66,3 +66,19 @@ def test_tomorrow_moves_the_forecast_day():
 def test_near_wins_over_an_earlier_in():
     found = extract_hike_request("hiking in the rain near Boulder this weekend", today=SATURDAY)
     assert found["place"] == "Boulder"
+
+
+def test_day_hike_this_saturday_leaves_a_clean_place():
+    found = extract_hike_request("day hike near Boulder, CO this Saturday", today=FRIDAY)
+    assert found["place"] == "Boulder, CO"
+    assert found["when"]["start"] == "2026-11-14"
+    assert found["when"]["end"] == "2026-11-14"
+    assert found["when"]["trip_length"] == "day hike"
+    assert "this Saturday" in found["when"]["label"]
+
+
+def test_next_weekday_and_overnight():
+    found = extract_hike_request("overnight near Moab next Monday", today=SATURDAY)
+    assert found["place"] == "Moab"
+    assert found["when"]["start"] == "2026-11-23"
+    assert found["when"]["trip_length"] == "overnight"

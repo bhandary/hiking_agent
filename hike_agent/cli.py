@@ -13,7 +13,14 @@ from hike_agent.graph import build_graph
 from hike_agent.model import make_complete, warn_model_failure
 
 
-def plan_hike(query: str, *, complete=None, settings=None, when=None) -> dict[str, Any]:
+def plan_hike(
+    query: str,
+    *,
+    complete=None,
+    settings=None,
+    when=None,
+    coordinates=None,
+) -> dict[str, Any]:
     """Run the graph for one place query and return the final state."""
 
     settings = settings or get_settings()
@@ -24,7 +31,10 @@ def plan_hike(query: str, *, complete=None, settings=None, when=None) -> dict[st
             warn_model_failure(exc)
             complete = None
     graph = build_graph(complete=complete)
-    return graph.invoke({"query": query, "when": when or {}, "errors": [], "trace": []})
+    payload: dict[str, Any] = {"query": query, "when": when or {}, "errors": [], "trace": []}
+    if coordinates:
+        payload["coordinates"] = coordinates
+    return graph.invoke(payload)
 
 
 def format_sources(state: dict[str, Any]) -> str:
@@ -68,8 +78,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "place",
         nargs="?",
-        help='Place to plan around, for example "Boulder, Colorado". Use "me" for this machine\'s IP location.',
+        help='Place to plan around, for example "Boulder, Colorado". "me" asks for a city unless --lat and --lon are set.',
     )
+    parser.add_argument("--lat", type=float, default=None, help="Latitude supplied by the client. Not this server's location.")
+    parser.add_argument("--lon", type=float, default=None, help="Longitude supplied by the client.")
     parser.add_argument("--json", action="store_true", help="Print the graph state as JSON.")
     parser.add_argument("--chat", action="store_true", help="Ask follow-up questions after the recommendation.")
     args = parser.parse_args(argv)
@@ -84,13 +96,20 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         warn_model_failure(exc)
 
+    if (args.lat is None) != (args.lon is None):
+        print("Provide both --lat and --lon.", file=sys.stderr)
+        return 2
     extracted = extract_hike_request(args.place)
+    coordinates = extracted.get("coordinates")
+    if args.lat is not None and args.lon is not None:
+        coordinates = {"latitude": args.lat, "longitude": args.lon}
     try:
         state = plan_hike(
             extracted["place"],
             complete=complete,
             settings=settings,
             when=extracted.get("when") or {},
+            coordinates=coordinates,
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Hike planner failed: {exc}", file=sys.stderr)

@@ -55,33 +55,32 @@ def test_geocoder_failure_is_reported(settings):
     assert "TimeoutError" in place["note"]
 
 
-def test_me_uses_the_ip_lookup(settings):
-    def ip_lookup():
-        return {
-            "query": "me",
-            "name": "Boulder",
-            "label": "Boulder, Colorado, United States",
-            "latitude": 40.0,
-            "longitude": -105.2,
-            "state": "Colorado",
-            "state_code": "CO",
-            "country": "United States",
-            "source": "ip",
-            "note": "",
-        }
+def test_near_me_asks_for_a_place_instead_of_using_server_ip(settings):
+    def get_json(*_args, **_kwargs):
+        raise AssertionError("near me must not geocode or use the server IP")
 
-    place = resolve_place("me", settings=settings, ip_lookup=ip_lookup, get_json=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("network")))
-    assert place["source"] == "ip"
-    assert place["state_code"] == "CO"
-
-
-def test_ip_lookup_failure(settings):
-    def ip_lookup():
-        raise OSError("offline")
-
-    place = resolve_place("here", settings=settings, ip_lookup=ip_lookup)
+    place = resolve_place("me", settings=settings, get_json=get_json)
     assert place["latitude"] is None
-    assert place["source"] == "ip"
+    assert place["source"] == "needs-location"
+    assert "city or park name" in place["note"]
+
+    here = resolve_place("here", settings=settings, get_json=get_json)
+    assert here["source"] == "needs-location"
+
+
+def test_near_me_uses_client_coordinates(settings):
+    def get_json(*_args, **_kwargs):
+        raise AssertionError("client coordinates must not geocode")
+
+    place = resolve_place(
+        "me",
+        settings=settings,
+        get_json=get_json,
+        coordinates={"latitude": 40.0, "longitude": -105.2},
+    )
+    assert place["source"] == "client"
+    assert place["latitude"] == pytest.approx(40.0)
+    assert place["longitude"] == pytest.approx(-105.2)
 
 
 def test_resolve_place_tool_is_a_langchain_tool():

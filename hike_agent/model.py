@@ -36,8 +36,17 @@ def warn_model_failure(exc: BaseException) -> str:
     return message
 
 
+class ModelUnavailable(RuntimeError):
+    """The OpenAI request failed after the allowed attempts."""
+
+
 def build_chat_model(settings: Settings) -> Any:
-    """Return a ChatOpenAI client. Raises when ``OPENAI_API_KEY`` is missing."""
+    """Return a ChatOpenAI client. Raises when ``OPENAI_API_KEY`` is missing.
+
+    Each attempt uses ``OPENAI_TIMEOUT_SECONDS``. Retries are counted in
+    ``make_complete`` so a failure becomes one error instead of a stack trace.
+    The client itself does not retry again.
+    """
 
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not set.")
@@ -47,6 +56,8 @@ def build_chat_model(settings: Settings) -> Any:
         "model": settings.model_name,
         "temperature": 0,
         "api_key": settings.openai_api_key,
+        "timeout": settings.openai_timeout,
+        "max_retries": 0,
     }
     if settings.openai_base_url:
         kwargs["base_url"] = settings.openai_base_url
@@ -67,20 +78,42 @@ def _message_text(content: Any) -> str:
     return str(content).strip()
 
 
-def make_complete(settings: Settings):
-    """Return a function that asks the OpenAI model to rewrite a factual brief."""
+def make_complete(settings: Settings, call=None):
+    """Return a function that asks the OpenAI model to rewrite a factual brief.
+
+    ``call`` replaces the network request in tests. Attempts are
+    ``OPENAI_MAX_RETRIES`` plus the first try. The last failure is raised as
+    ``ModelUnavailable``.
+    """
 
     if not settings.openai_api_key:
         raise RuntimeError("OPENAI_API_KEY is not set.")
 
+    attempts = max(1, int(settings.openai_max_retries) + 1)
+
     def complete(brief: str) -> str:
-        model = build_chat_model(settings)
-        message = model.invoke(
-            [
-                SystemMessage(content=PLANNER_SYSTEM),
-                HumanMessage(content=brief),
-            ]
-        )
-        return _message_text(message.content)
+        last: BaseException | None = None
+        for _attempt in range(attempts):
+            try:
+                if call is not None:
+                    text = call(brief)
+                else:
+                    model = build_chat_model(settings)
+                    message = model.invoke(
+                        [
+                            SystemMessage(content=PLANNER_SYSTEM),
+                            HumanMessage(content=brief),
+                        ]
+                    )
+                    text = _message_text(message.content)
+                if not str(text or "").strip():
+                    raise RuntimeError("the model returned an empty recommendation")
+                return str(text).strip()
+            except Exception as exc:  # noqa: BLE001 - counted toward the retry limit
+                last = exc
+        detail = f"{type(last).__name__}: {last}" if last else "unknown error"
+        raise ModelUnavailable(
+            f"The hike model did not respond after {attempts} attempts ({detail})."
+        ) from last
 
     return complete

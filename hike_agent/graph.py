@@ -15,9 +15,13 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
-from hike_agent.agents.location import resolve_place as default_resolve_place
+from hike_agent.agents.location import (
+    COULD_NOT_FIND,
+    NEED_LOCATION,
+    resolve_place as default_resolve_place,
+)
 from hike_agent.agents.parks import find_hikes as default_find_hikes
-from hike_agent.agents.planner import render_brief, safety_footer
+from hike_agent.agents.planner import ground_recommendation, render_brief, safety_footer
 from hike_agent.agents.weather import hiking_conditions as default_hiking_conditions
 from hike_agent.model import warn_model_failure
 from hike_agent.state import HikeState
@@ -56,8 +60,20 @@ def build_graph(
     """Compile the hike graph. Pass fakes for ``complete`` and the tools in tests."""
 
     def location_node(state: HikeState) -> dict[str, Any]:
-        place = resolve_place(state.get("query") or "")
-        label = place.get("label") or state.get("query") or "unknown place"
+        query = state.get("query") or ""
+        try:
+            place = resolve_place(query, coordinates=state.get("coordinates"))
+        except TypeError:
+            place = resolve_place(query)
+        if place.get("latitude") is None or place.get("longitude") is None:
+            message = NEED_LOCATION if place.get("source") == "needs-location" else COULD_NOT_FIND
+            return {
+                "place": place,
+                "recommendation": message,
+                "planner": "stopped",
+                "trace": [f"location: stopped via {place.get('source')}"],
+            }
+        label = place.get("label") or query or "unknown place"
         return {
             "place": place,
             "trace": [f"location: {label} via {place.get('source')}"],
@@ -94,21 +110,22 @@ def build_graph(
             text = complete(brief).strip()
             if not text:
                 raise RuntimeError("the model returned an empty recommendation")
+            text, how = ground_recommendation(text, state, complete)
         except Exception as exc:  # noqa: BLE001 - template output is the safe fallback
             warning = warn_model_failure(exc)
             return {
-                "recommendation": brief,
+                "recommendation": f"{warning}\n\n{brief}",
                 "planner": "template",
                 "errors": [warning],
                 "trace": ["planner: template after model error"],
             }
         footer = safety_footer(state)
         recommendation = f"{text}\n\n{footer}" if footer else text
-        return {"recommendation": recommendation, "planner": "model", "trace": ["planner: model"]}
+        return {"recommendation": recommendation, "planner": how, "trace": [f"planner: {how}"]}
 
     def route_after_location(state: HikeState) -> str | list[str]:
-        if not _has_coordinates(state):
-            return "planner"
+        if state.get("planner") == "stopped" or not _has_coordinates(state):
+            return END
         return ["parks", "weather"]
 
     graph = StateGraph(HikeState)

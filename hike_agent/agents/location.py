@@ -1,21 +1,31 @@
-"""Location agent: turn a place name or 'me' into coordinates and a state code."""
+"""Location agent: turn a place name or client coordinates into a map point.
+
+``me``, ``here``, and ``near me`` do not use this machine's IP address. On a
+hosted server that address is the host, not the hiker. Those queries need a
+city or park name, or coordinates the client sent.
+"""
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from langchain_core.tools import tool
 
 from hike_agent.config import Settings, get_settings
+from hike_agent.coordinates import parse_coordinates
 from hike_agent.services.http import get_json as default_get_json
 from hike_agent.services.states import state_code
 
 AGENT_NAME = "location"
-AGENT_BRIEF = "Resolve a place name, or this machine's public IP, to coordinates and a US state code."
+AGENT_BRIEF = "Resolve a place name, or client-provided coordinates, to a map point and a US state code."
 
 GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
-IP_QUERIES = {"", "me", "here", "current", "current location"}
+NEAR_ME = {"", "me", "here", "current", "current location", "near me", "my location"}
+NEED_LOCATION = "Tell me a city or park name. I don't use this server's location."
+COULD_NOT_FIND = "I couldn't find that place, try a city/park name."
 GetJson = Callable[..., Any]
+_NEAR_WORDS = re.compile(r"\b(?:at|near|around)\b", re.IGNORECASE)
 
 
 def _from_geocode_hit(query: str, hit: dict[str, Any]) -> dict[str, Any]:
@@ -37,27 +47,18 @@ def _from_geocode_hit(query: str, hit: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _lookup_ip() -> dict[str, Any] | None:
-    import geocoder
-
-    result = geocoder.ip("me")
-    if not result.ok or not result.latlng:
-        return None
-    latitude, longitude = result.latlng
-    state_name = result.state
-    city = result.city or "Current location"
-    country = result.country
-    label_parts = [part for part in (city, state_name, country) if part]
+def _from_coordinates(query: str, coords: tuple[float, float]) -> dict[str, Any]:
+    latitude, longitude = coords
     return {
-        "query": "me",
-        "name": city,
-        "label": ", ".join(label_parts) or "Current location",
-        "latitude": float(latitude),
-        "longitude": float(longitude),
-        "state": state_name,
-        "state_code": state_code(state_name),
-        "country": country,
-        "source": "ip",
+        "query": query or "me",
+        "name": "Provided location",
+        "label": f"{latitude:.4f}, {longitude:.4f}",
+        "latitude": latitude,
+        "longitude": longitude,
+        "state": None,
+        "state_code": None,
+        "country": None,
+        "source": "client",
         "note": "",
     }
 
@@ -77,27 +78,35 @@ def _empty(query: str, note: str, source: str = "none") -> dict[str, Any]:
     }
 
 
+def _is_near_me(text: str) -> bool:
+    lowered = " ".join(text.lower().split())
+    if lowered in NEAR_ME:
+        return True
+    without_coords = re.sub(r"[+-]?\d{1,2}\.\d+\s*,\s*[+-]?\d{1,3}\.\d+", " ", lowered)
+    without_coords = _NEAR_WORDS.sub(" ", without_coords)
+    without_coords = " ".join(without_coords.split())
+    return without_coords in NEAR_ME
+
+
 def resolve_place(
     query: str,
     *,
     settings: Settings | None = None,
     get_json: GetJson | None = None,
-    ip_lookup: Callable[[], dict[str, Any] | None] | None = None,
+    coordinates: Any = None,
 ) -> dict[str, Any]:
     """Resolve ``query`` to a place dict. Network helpers are injectable for tests."""
 
     settings = settings or get_settings()
     get_json = get_json or default_get_json
     text = (query or "").strip()
-    if text.lower() in IP_QUERIES:
-        try:
-            found = (ip_lookup or _lookup_ip)()
-        except Exception as exc:  # noqa: BLE001 - IP geolocation is a best-effort fallback
-            return _empty(text or "me", f"IP location failed ({type(exc).__name__}).", source="ip")
-        if not found:
-            return _empty(text or "me", "IP location did not return coordinates.", source="ip")
-        found["query"] = text or "me"
-        return found
+    coords = parse_coordinates(coordinates) or parse_coordinates(text)
+    if _is_near_me(text) or (not text and coords):
+        if coords:
+            return _from_coordinates(text or "me", coords)
+        return _empty(text or "me", NEED_LOCATION, source="needs-location")
+    if not text:
+        return _empty("", NEED_LOCATION, source="needs-location")
 
     try:
         payload = get_json(
@@ -118,7 +127,7 @@ def resolve_place(
 
 @tool
 def resolve_place_tool(query: str) -> str:
-    """Resolve a place name, or 'me' for this machine, to coordinates and a US state code."""
+    """Resolve a place name to coordinates. 'me' needs a city name or client coordinates."""
 
     import json
 
