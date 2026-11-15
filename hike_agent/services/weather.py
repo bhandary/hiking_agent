@@ -104,6 +104,8 @@ def summarize_daylight(weather_data: dict[str, Any], today: date | None = None) 
         daylight_codes.append(int(code))
 
     if not daylight_temps:
+        if today != date.today():
+            return {"ok": False, "summary": f"No daylight forecast was available for {today.isoformat()}."}
         return {"ok": False, "summary": "Could not get a weather summary for today's daylight hours."}
     try:
         average_temp = round(statistics.mean(daylight_temps))
@@ -118,8 +120,12 @@ def summarize_daylight(weather_data: dict[str, Any], today: date | None = None) 
     else:
         max_precip = None
         precip_text = "no precipitation probability in the forecast"
+    if today == date.today():
+        prefix = "Today's forecast"
+    else:
+        prefix = f"Forecast for {today.isoformat()}"
     summary = (
-        f"Today's forecast: {description}, with an average temperature of "
+        f"{prefix}: {description}, with an average temperature of "
         f"{average_temp}°C and {precip_text}."
     )
     return {
