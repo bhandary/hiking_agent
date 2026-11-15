@@ -29,7 +29,9 @@ def _forecast_horizon(today: date | None) -> int:
     delta = (today - date.today()).days
     if delta <= 1:
         return 2
-    return min(delta + 1, 7)
+    # Open-Meteo and the weather MCP accept 16 days. "next Monday" can be 13
+    # days out; a cap of 7 asked for a window that did not contain that day.
+    return min(delta + 1, 16)
 
 McpCall = Callable[[Any, str, dict[str, Any], float], dict[str, Any]]
 
