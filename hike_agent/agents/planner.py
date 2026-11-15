@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from hike_agent.agents.parks import NOT_VERIFIED, NPS_SOURCES
+
 AGENT_NAME = "planner"
 AGENT_BRIEF = "Combine location, parks, and conditions into a short hike recommendation with safety notes."
 
@@ -16,9 +18,16 @@ Rules:
 - Recommend at most three options that appear in the brief. Do not invent parks, trails, temperatures, or alerts.
 - If the risk is unsafe, say not to hike today and offer the options only as later ideas.
 - Keep every safety note. A missing alert is not an all-clear.
-- When the parks source is OpenStreetMap, say these are community-mapped places, not an official National Park Service listing.
+- When a place is marked "not verified by NPS", repeat that phrase. Do not present those names as National Park Service data.
 - Stay under 250 words.
 """
+
+
+def _nps_verified(park: dict[str, Any], report: dict[str, Any]) -> bool:
+    if "nps_verified" in park:
+        return bool(park["nps_verified"])
+    source = park.get("source") or report.get("source")
+    return source in NPS_SOURCES
 
 
 def render_brief(state: dict[str, Any]) -> str:
@@ -44,7 +53,12 @@ def render_brief(state: dict[str, Any]) -> str:
         lines.append("No parks or trails were found.")
     for index, park in enumerate(parks, start=1):
         trails = ", ".join(park.get("trails") or []) or "no named trails in the data"
-        lines.append(f"{index}. {park.get('name')} — {trails}")
+        label = f"{index}. {park.get('name')} — {trails}"
+        if not _nps_verified(park, parks_report):
+            label = f"{label} ({NOT_VERIFIED})"
+        lines.append(label)
+        if park.get("source"):
+            lines.append(f"   Source: {park['source']}")
         if park.get("description"):
             lines.append(f"   {park['description']}")
         for alert in park.get("alerts") or []:
@@ -59,8 +73,11 @@ def safety_footer(state: dict[str, Any]) -> str:
     """Repeat structured safety notes under a model-written recommendation."""
 
     conditions = state.get("conditions") or {}
+    parks_report = state.get("parks") or {}
     notes = list(conditions.get("safety_notes") or [])
-    for park in (state.get("parks") or {}).get("parks") or []:
+    if parks_report.get("parks") and not parks_report.get("nps_verified", parks_report.get("source") in NPS_SOURCES):
+        notes.append(f"Park and trail names in this plan are {NOT_VERIFIED}.")
+    for park in parks_report.get("parks") or []:
         for alert in park.get("alerts") or []:
             notes.append(f"{park.get('name')}: {alert}")
     unique: list[str] = []

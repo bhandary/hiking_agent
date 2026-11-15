@@ -1,9 +1,10 @@
 """LangGraph that supervises the hike agents.
 
 The workflow is fixed: resolve the place, then collect parks and weather
-together, then write the recommendation. A supervisor language model that
-chooses which agent to call would be able to skip weather or parks. This graph
-does not. The planner is the only model call, and it sees both reports.
+together, then write the recommendation. That order is not chosen by a model.
+A supervisor language model that picks the next agent could skip weather or
+parks. This graph does not. The planner is the only model call, and it sees
+both reports.
 """
 
 from __future__ import annotations

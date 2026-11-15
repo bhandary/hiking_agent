@@ -22,6 +22,8 @@ def settings() -> Settings:
         nps_api_key="",
         nps_mcp_url="https://nps.example.test/mcp",
         nps_mcp_enabled=True,
+        nps_mcp_command="npx",
+        nps_mcp_args=("-y", "@cyanheads/national-parks-mcp-server@0.3.0"),
         weather_mcp_enabled=True,
         weather_mcp_command="npx",
         weather_mcp_args=("-y", "@dangahagan/weather-mcp@1.35.17"),

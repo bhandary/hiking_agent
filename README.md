@@ -8,7 +8,7 @@ The default model is still local Ollama `gpt-oss:20b`. Set `MODEL_PROVIDER=opena
 
 The hike workflow does not need a model to decide what to do next. Coordinates have to exist before parks or weather can be looked up. Parks and weather do not depend on each other. The recommendation has to see both, including alerts.
 
-A supervisor model that picks the next agent can skip the weather call or name a park that was never returned. This graph is the supervisor. It always runs the specialist tools. The language model is only the planner, and it is told to use the reports it was given. If that model is down, the factual brief is printed anyway, so the safety notes are not lost.
+A supervisor model that picks the next agent can skip the weather call or name a park that was never returned. This graph is the supervisor, and that choice is settled: location, then parks and weather together, then the planner. A language model does not choose which agent runs. The planner is the only model call, and it is told to use the reports it was given. If that model is down, the factual brief is printed anyway, so the safety notes are not lost.
 
 ```mermaid
 flowchart TD
@@ -26,9 +26,10 @@ Each specialist tries an MCP server first and falls back to a direct API if that
 
 Parks, in order:
 
-1. **National Park Service MCP.** [cyanheads/national-parks-mcp-server](https://github.com/cyanheads/national-parks-mcp-server), hosted at `https://national-parks.caseyjhand.com/mcp`. Tools used: `nps_find_parks`, `nps_get_activities`, `nps_get_alerts`. No client API key. The server is open source and speaks only NPS trip-planning tools.
-2. **NPS REST API**, the same `/parks` and `/thingstodo` calls the original script made, plus `/alerts`. Requires `NPS_API_KEY` (free from the [NPS developer portal](https://www.nps.gov/subjects/developer/get-started.htm)).
-3. **OpenStreetMap** (Nominatim, then Overpass) when both NPS paths fail. Results are labeled as community-mapped places, not official NPS listings.
+1. **Local National Park Service MCP**, when `NPS_API_KEY` is set. The same [cyanheads/national-parks-mcp-server](https://github.com/cyanheads/national-parks-mcp-server) package, started with `npx` on this machine so the request uses our network and our key. Tools: `nps_find_parks`, `nps_get_activities`, `nps_get_alerts`.
+2. **Hosted NPS MCP** at `https://national-parks.caseyjhand.com/mcp`. No client key. Used when the local server is unavailable, and also when no key is set.
+3. **NPS REST API**, the same `/parks` and `/thingstodo` calls the original script made, plus `/alerts`. Requires `NPS_API_KEY` (free from the [NPS developer portal](https://www.nps.gov/subjects/developer/get-started.htm)).
+4. **OpenStreetMap** (Nominatim, then Overpass) when every NPS path fails. Each of those places has `source: openstreetmap` and `nps_verified: false`. The plan prints `not verified by NPS` on the option and again in the notes.
 
 Weather, in order:
 
@@ -94,10 +95,11 @@ Copy `.env.example`. Do not commit a filled-in `.env`.
 | `OLLAMA_BASE_URL` | Default `http://127.0.0.1:11434` |
 | `OPENAI_API_KEY` | Required when `MODEL_PROVIDER=openai` |
 | `OPENAI_BASE_URL` | Optional base URL for an OpenAI-compatible server |
-| `NPS_API_KEY` | Direct National Park Service fallback |
-| `NPS_MCP_URL` | Hosted parks MCP server |
-| `NPS_MCP_ENABLED` | `false` skips the parks MCP server |
-| `NPS_MCP_TIMEOUT_SECONDS` | How long to wait before the NPS fallback |
+| `NPS_API_KEY` | Starts the local NPS MCP server and, if that fails, calls the NPS REST API |
+| `NPS_MCP_COMMAND`, `NPS_MCP_ARGS` | How the local NPS MCP process is started. Ignored when `NPS_API_KEY` is empty |
+| `NPS_MCP_URL` | Hosted parks MCP server, used after the local server |
+| `NPS_MCP_ENABLED` | `false` skips both NPS MCP servers |
+| `NPS_MCP_TIMEOUT_SECONDS` | How long to wait on each NPS MCP server before the next source |
 | `WEATHER_MCP_ENABLED` | `false` uses Open-Meteo and NWS only |
 | `WEATHER_MCP_COMMAND`, `WEATHER_MCP_ARGS` | How the weather MCP process is started |
 | `WEATHER_MCP_TIMEOUT_SECONDS` | How long to wait before the weather fallback |

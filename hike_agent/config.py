@@ -32,6 +32,8 @@ class Settings:
     nps_api_key: str
     nps_mcp_url: str
     nps_mcp_enabled: bool
+    nps_mcp_command: str
+    nps_mcp_args: tuple[str, ...]
     weather_mcp_enabled: bool
     weather_mcp_command: str
     weather_mcp_args: tuple[str, ...]
@@ -47,9 +49,13 @@ def get_settings() -> Settings:
     Called at use time so tests can change variables without reimporting.
     """
 
-    args = os.environ.get(
+    weather_args = os.environ.get(
         "WEATHER_MCP_ARGS",
         "-y,@dangahagan/weather-mcp@1.35.17",
+    )
+    nps_args = os.environ.get(
+        "NPS_MCP_ARGS",
+        "-y,@cyanheads/national-parks-mcp-server@0.3.0",
     )
     return Settings(
         model_provider=os.environ.get("MODEL_PROVIDER", "ollama").strip().lower(),
@@ -63,9 +69,11 @@ def get_settings() -> Settings:
             "https://national-parks.caseyjhand.com/mcp",
         ).strip(),
         nps_mcp_enabled=_flag("NPS_MCP_ENABLED", True),
+        nps_mcp_command=os.environ.get("NPS_MCP_COMMAND", "npx").strip(),
+        nps_mcp_args=tuple(part for part in nps_args.split(",") if part),
         weather_mcp_enabled=_flag("WEATHER_MCP_ENABLED", True),
         weather_mcp_command=os.environ.get("WEATHER_MCP_COMMAND", "npx").strip(),
-        weather_mcp_args=tuple(part for part in args.split(",") if part),
+        weather_mcp_args=tuple(part for part in weather_args.split(",") if part),
         nps_mcp_timeout=_float("NPS_MCP_TIMEOUT_SECONDS", 12),
         weather_mcp_timeout=_float("WEATHER_MCP_TIMEOUT_SECONDS", 25),
         http_timeout=_float("HTTP_TIMEOUT_SECONDS", 20),

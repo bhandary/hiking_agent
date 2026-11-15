@@ -125,6 +125,13 @@ def test_mcp_failure_falls_back_to_the_nps_api(settings: Settings):
 
 
 def test_without_a_key_openstreetmap_is_the_fallback(settings):
+    seen_targets = []
+
+    def mcp_call(target, tool, _arguments, _timeout):
+        assert tool == "nps_find_parks"
+        seen_targets.append(target)
+        return mcp_down()
+
     def get_json(_url, **kwargs):
         query = kwargs["params"]["q"]
         if query == "hiking":
@@ -170,16 +177,20 @@ def test_without_a_key_openstreetmap_is_the_fallback(settings):
     report = find_hikes(
         PLACE,
         settings=settings,
-        mcp_call=mcp_down,
+        mcp_call=mcp_call,
         get_json=get_json,
         overpass=overpass,
     )
+    assert seen_targets == [settings.nps_mcp_url]
     assert report["source"] == "openstreetmap"
     names = {park["name"] for park in report["parks"]}
     assert "Bluebell Hiking Trail" in names
     assert "Boulder Valley Ranch Trails" in names
     assert "National Park Village" not in names
-    assert "not an official National Park Service" in report["note"]
+    assert "not verified by NPS" in report["note"]
+    assert report["nps_verified"] is False
+    assert {park["source"] for park in report["parks"]} == {"openstreetmap"}
+    assert all(park["nps_verified"] is False for park in report["parks"])
 
 
 def test_all_park_sources_down(settings):
@@ -193,6 +204,97 @@ def test_all_park_sources_down(settings):
     assert report["source"] == "none"
     assert report["parks"] == []
     assert "NPS_API_KEY" in report["note"]
+
+
+def _romo_payload():
+    return {
+        "ok": True,
+        "text": "",
+        "error": None,
+        "structured": {
+            "parks": [
+                {
+                    "fullName": "Rocky Mountain National Park",
+                    "parkCode": "romo",
+                    "description": "Alpine tundra and lakes.",
+                    "designation": "National Park",
+                    "latitude": "40.34",
+                    "longitude": "-105.68",
+                    "url": "https://www.nps.gov/romo/",
+                    "activities": ["Hiking"],
+                }
+            ]
+        },
+    }
+
+
+def test_api_key_tries_local_mcp_before_hosted_then_the_api(settings: Settings):
+    settings = Settings(**{**settings.__dict__, "nps_api_key": "secret-key"})
+    seen = []
+
+    def mcp_call(target, tool, _arguments, _timeout):
+        assert tool == "nps_find_parks"
+        seen.append(target)
+        return {"ok": False, "text": "", "structured": None, "error": "down"}
+
+    def get_json(url, **kwargs):
+        assert "secret-key" == kwargs["params"]["api_key"]
+        if url.endswith("/parks"):
+            return {
+                "data": [
+                    {
+                        "fullName": "Rocky Mountain National Park",
+                        "parkCode": "romo",
+                        "designation": "National Park",
+                        "latitude": "40.34",
+                        "longitude": "-105.68",
+                    }
+                ]
+            }
+        return {"data": []}
+
+    report = find_hikes(PLACE, settings=settings, mcp_call=mcp_call, get_json=get_json)
+    local, hosted = seen
+    assert local["mcpServers"]["nps"]["command"] == "npx"
+    assert "@cyanheads/national-parks-mcp-server@0.3.0" in local["mcpServers"]["nps"]["args"]
+    assert local["mcpServers"]["nps"]["env"]["NPS_API_KEY"] == "secret-key"
+    assert hosted == settings.nps_mcp_url
+    assert report["source"] == "nps-api"
+    assert report["nps_verified"] is True
+    assert report["parks"][0]["source"] == "nps-api"
+    assert report["parks"][0]["nps_verified"] is True
+    assert "secret-key" not in report["note"]
+    assert "not verified by NPS" not in report["note"]
+
+
+def test_local_mcp_success_skips_hosted_mcp_and_the_api(settings: Settings):
+    settings = Settings(**{**settings.__dict__, "nps_api_key": "secret-key"})
+    targets = []
+
+    def mcp_call(target, tool, _arguments, _timeout):
+        targets.append(target)
+        if tool == "nps_find_parks":
+            return _romo_payload()
+        if tool == "nps_get_activities":
+            return {
+                "ok": True,
+                "text": "",
+                "error": None,
+                "structured": {"activities": [{"title": "Bear Lake Trail", "tags": ["hiking"]}]},
+            }
+        if tool == "nps_get_alerts":
+            return {"ok": True, "text": "", "error": None, "structured": {"alerts": []}}
+        raise AssertionError(tool)
+
+    def get_json(*_args, **_kwargs):
+        raise AssertionError("direct API should not run after local MCP succeeds")
+
+    report = find_hikes(PLACE, settings=settings, mcp_call=mcp_call, get_json=get_json)
+    assert report["source"] == "nps-mcp-local"
+    assert report["nps_verified"] is True
+    assert all(isinstance(target, dict) for target in targets)
+    assert report["parks"][0]["source"] == "nps-mcp-local"
+    assert report["parks"][0]["trails"] == ["Bear Lake Trail"]
 
 
 def test_nps_http_error_does_not_include_the_api_key(settings: Settings):

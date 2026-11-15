@@ -15,6 +15,21 @@ from typing import Any
 from hike_agent.config import Settings
 
 
+def nps_stdio_target(settings: Settings) -> dict[str, Any]:
+    """Local National Park Service MCP server. Requires ``NPS_API_KEY`` in the child env."""
+
+    return {
+        "mcpServers": {
+            "nps": {
+                "command": settings.nps_mcp_command,
+                "args": list(settings.nps_mcp_args),
+                "env": {"NPS_API_KEY": settings.nps_api_key},
+                "timeout": int(settings.nps_mcp_timeout * 1000),
+            }
+        }
+    }
+
+
 def weather_mcp_target(settings: Settings) -> dict[str, Any]:
     """Stdio config for the keyless NOAA / Open-Meteo weather server."""
 

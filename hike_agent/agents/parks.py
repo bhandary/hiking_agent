@@ -1,9 +1,10 @@
 """Parks and trails agent.
 
 Order of sources:
-1. National Park Service MCP (cyanheads hosted server by default).
-2. The original NPS REST API, when ``NPS_API_KEY`` is set.
-3. OpenStreetMap, so a keyless run can still name nearby trails.
+1. Local National Park Service MCP (stdio) when ``NPS_API_KEY`` is set.
+2. Hosted National Park Service MCP.
+3. The original NPS REST API, when ``NPS_API_KEY`` is set.
+4. OpenStreetMap. Those rows are labeled ``not verified by NPS``.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import requests
 from langchain_core.tools import tool
 
 from hike_agent.config import Settings, get_settings
-from hike_agent.mcp_bridge import call_mcp_tool, call_mcp_tools
+from hike_agent.mcp_bridge import call_mcp_tool, call_mcp_tools, nps_stdio_target
 from hike_agent.services.http import get_json as default_get_json
 from hike_agent.services.nps import (
     alert_lines,
@@ -32,6 +33,8 @@ AGENT_BRIEF = "Find nearby national parks, hiking activities, and current park a
 McpCall = Callable[[Any, str, dict[str, Any], float], dict[str, Any]]
 PARK_HEADING = re.compile(r"^###\s+(?P<name>.+)$", re.MULTILINE)
 PARK_CODE = re.compile(r"\*\*parkCode:\*\*\s+(?P<code>[A-Za-z0-9]{3,6})")
+NPS_SOURCES = frozenset({"nps-mcp-local", "nps-mcp", "nps-api"})
+NOT_VERIFIED = "not verified by NPS"
 
 
 def _items(structured: Any, *keys: str) -> list[dict[str, Any]]:
@@ -112,6 +115,25 @@ def _attach_mcp_details(
         _apply_activity_payload(park, activities, alerts)
 
 
+def _report(source: str, note: str, parks: list[dict[str, Any]]) -> dict[str, Any]:
+    verified = source in NPS_SOURCES
+    for park in parks:
+        park["source"] = source
+        park["nps_verified"] = verified
+    return {"source": source, "note": note, "nps_verified": verified, "parks": parks}
+
+
+def _mcp_attempts(settings: Settings) -> list[tuple[str, Any]]:
+    """Local stdio first when a key is set, then the hosted server."""
+
+    attempts: list[tuple[str, Any]] = []
+    if settings.nps_mcp_enabled and settings.nps_api_key:
+        attempts.append(("nps-mcp-local", nps_stdio_target(settings)))
+    if settings.nps_mcp_enabled and settings.nps_mcp_url:
+        attempts.append(("nps-mcp", settings.nps_mcp_url))
+    return attempts
+
+
 def find_hikes(
     place: dict[str, Any],
     *,
@@ -128,22 +150,23 @@ def find_hikes(
     latitude = place.get("latitude")
     longitude = place.get("longitude")
     if latitude is None or longitude is None:
-        return {"source": "none", "note": "No coordinates, so park search was skipped.", "parks": []}
+        return _report("none", "No coordinates, so park search was skipped.", [])
 
     notes: list[str] = []
-    if settings.nps_mcp_enabled and settings.nps_mcp_url:
-        arguments: dict[str, Any] = {"limit": 8}
-        if place.get("state_code"):
-            arguments["stateCode"] = place["state_code"]
-        if place.get("name"):
-            arguments["query"] = place["name"]
-        found = mcp_call(settings.nps_mcp_url, "nps_find_parks", arguments, settings.nps_mcp_timeout)
+    arguments: dict[str, Any] = {"limit": 8}
+    if place.get("state_code"):
+        arguments["stateCode"] = place["state_code"]
+    if place.get("name"):
+        arguments["query"] = place["name"]
+    for source_name, target in _mcp_attempts(settings):
+        found = mcp_call(target, "nps_find_parks", arguments, settings.nps_mcp_timeout)
         parks = rank_parks(parks_from_mcp_result(found), latitude, longitude, limit=4)
         if parks:
-            _attach_mcp_details(parks, mcp_call, settings.nps_mcp_url, settings.nps_mcp_timeout)
-            return {"source": "nps-mcp", "note": "", "parks": parks}
+            _attach_mcp_details(parks, mcp_call, target, settings.nps_mcp_timeout)
+            return _report(source_name, "", parks)
         error = str((found or {}).get("error") or "no parks returned")
-        notes.append(f"NPS MCP unavailable ({error[:180]}).")
+        label = "Local NPS MCP" if source_name == "nps-mcp-local" else "Hosted NPS MCP"
+        notes.append(f"{label} unavailable ({error[:180]}).")
 
     if settings.nps_api_key:
         try:
@@ -167,11 +190,11 @@ def find_hikes(
             notes.append("NPS API returned data that was not JSON.")
             parks = []
         if parks:
-            return {"source": "nps-api", "note": "", "parks": parks}
+            return _report("nps-api", "", parks)
         if not place.get("state_code"):
             notes.append("NPS API needs a US state code, and this place did not resolve to one.")
     else:
-        notes.append("NPS_API_KEY is not set, so the National Park Service API was skipped.")
+        notes.append("NPS_API_KEY is not set, so the local NPS MCP server and the National Park Service API were skipped.")
 
     try:
         osm_parks = nearby_outdoor_places(
@@ -188,15 +211,11 @@ def find_hikes(
     if osm_parks:
         note = " ".join(notes)
         note = (
-            f"{note} Results are from OpenStreetMap, not an official National Park Service listing."
+            f"{note} Results are from OpenStreetMap and are {NOT_VERIFIED}."
         ).strip()
-        return {"source": "openstreetmap", "note": note, "parks": osm_parks}
+        return _report("openstreetmap", note, osm_parks)
 
-    return {
-        "source": "none",
-        "note": " ".join(notes) or "No parks or trails were found.",
-        "parks": [],
-    }
+    return _report("none", " ".join(notes) or "No parks or trails were found.", [])
 
 
 @tool
