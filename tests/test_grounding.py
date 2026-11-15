@@ -75,6 +75,42 @@ def test_a_conflicting_risk_sentence_is_replaced_from_conditions():
     assert "Bear Lake Trail" in grounded
 
 
+def test_a_slice_of_a_longer_tool_number_is_not_grounded():
+    state = copy.deepcopy(STATE)
+    state["conditions"]["summary"] = "49 F / November 21 / 12 miles"
+    state["conditions"]["safety_notes"] = []
+    false_text = "It will be 9 F on November 2. The trail is 2 miles. Hike Bear Lake Trail."
+    grounded, how = ground_recommendation(false_text, state, lambda _prompt: false_text)
+    assert how == "grounded"
+    assert "It will be 9 F on November 2." not in grounded
+    assert "The trail is 2 miles." not in grounded
+
+    true_text = "It will be 49 F on November 21. The trail is 12 miles. Hike Bear Lake Trail."
+    kept, how = ground_recommendation(true_text, state, lambda _prompt: true_text)
+    assert how == "model"
+    assert "49 F" in kept
+    assert "November 21" in kept
+    assert "12 miles" in kept
+
+    decimal = copy.deepcopy(STATE)
+    decimal["conditions"]["summary"] = "4.9 F"
+    rejected, how = ground_recommendation(
+        "It will be 49 F. It will be 9 F. Hike Bear Lake Trail.",
+        decimal,
+        lambda _prompt: "It will be 49 F. It will be 9 F. Hike Bear Lake Trail.",
+    )
+    assert how == "grounded"
+    assert "It will be 49 F." not in rejected
+    assert "It will be 9 F." not in rejected
+    accepted, how = ground_recommendation(
+        "It will be 4.9 F. Hike Bear Lake Trail.",
+        decimal,
+        lambda _prompt: "It will be 4.9 F. Hike Bear Lake Trail.",
+    )
+    assert how == "model"
+    assert "4.9 F" in accepted
+
+
 def test_numbers_and_dates_copied_from_tool_results_are_kept():
     state = copy.deepcopy(STATE)
     state["parks"]["parks"][0]["description"] = "The range runs 300 miles. Established September 14."

@@ -530,11 +530,45 @@ def _measure_conflicts(text: str, facts: str) -> list[str]:
 
 
 def _verbatim_in_tools(spoken: str, facts: str) -> bool:
-    """True when the number or date is copied from tool text, not invented."""
+    """True when the number or date is copied from tool text, not sliced from a longer one.
+
+    ``9 F`` is not ``49 F``, ``November 2`` is not ``November 21``, and ``2 miles``
+    is not ``12 miles``. A decimal point is part of the number, so ``4.9`` is not
+    ``49`` and not the trailing ``9``.
+    """
 
     needle = " ".join(spoken.lower().split())
     haystack = " ".join((facts or "").lower().split())
-    return bool(needle) and needle in haystack
+    if not needle:
+        return False
+    start = 0
+    while True:
+        index = haystack.find(needle, start)
+        if index < 0:
+            return False
+        if _number_is_bounded(haystack, index, index + len(needle)):
+            return True
+        start = index + 1
+
+
+def _number_is_bounded(text: str, start: int, end: int) -> bool:
+    """No digit, or a decimal that continues a number, touches this match."""
+
+    before = text[start - 1] if start > 0 else ""
+    after = text[end] if end < len(text) else ""
+    if before.isdigit() or after.isdigit():
+        return False
+    starts_digit = start < len(text) and text[start].isdigit()
+    ends_digit = end > 0 and text[end - 1].isdigit()
+    if before == "." and starts_digit:
+        return False
+    if before == "," and starts_digit and start > 1 and text[start - 2].isdigit():
+        return False
+    if after == "." and ends_digit and end + 1 < len(text) and text[end + 1].isdigit():
+        return False
+    if after == "," and ends_digit and end + 1 < len(text) and text[end + 1].isdigit():
+        return False
+    return True
 
 
 def _risk_conflicts(text: str, state: dict[str, Any]) -> list[str]:

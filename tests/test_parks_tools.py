@@ -29,6 +29,52 @@ High peaks above Estes Park.
     assert parks[0]["park_code"] == "romo"
 
 
+def test_yosemite_mcp_text_keeps_coordinates_and_ranks_the_park_first(settings):
+    text = """## 3 parks
+
+### Devils Postpile National Monument
+**parkCode:** depo | **National Monument** | **States:** CA
+A basalt cliff south of the valley.
+**Coordinates:** 37.62985, -119.0846
+
+### Yosemite National Park
+**parkCode:** yose | **National Park** | **States:** CA
+Not just a great valley, but a shrine to human foresight.
+**Coordinates:** 37.84883288, -119.5571873
+
+### Mammoth Cave National Park
+**parkCode:** maca | **National Park** | **States:** KY
+A cave in Kentucky.
+**Coordinates:** 37.186, -86.1
+"""
+    parsed = parks_from_mcp_result({"ok": True, "text": text, "structured": None, "error": None})
+    yosemite = next(park for park in parsed if park["park_code"] == "yose")
+    assert yosemite["latitude"] == 37.84883288
+    assert yosemite["longitude"] == -119.5571873
+
+    def mcp_call(_target, tool, _arguments, _timeout):
+        if tool == "nps_find_parks":
+            return {"ok": True, "text": text, "structured": None, "error": None}
+        return {"ok": True, "text": "", "structured": None, "error": None}
+
+    report = find_hikes(
+        {
+            "name": "Yosemite",
+            "latitude": 37.84883288,
+            "longitude": -119.5571873,
+            "state_code": "CA",
+        },
+        settings=settings,
+        mcp_call=mcp_call,
+        get_json=lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("OpenStreetMap should not run")),
+    )
+    assert report["source"] == "nps-mcp"
+    assert report["parks"][0]["name"] == "Yosemite National Park"
+    assert report["parks"][0]["park_code"] == "yose"
+    assert "160 km" not in report["note"]
+    assert all(park["park_code"] != "maca" for park in report["parks"])
+
+
 def test_mcp_error_payload_is_not_a_park_list():
     result = {"ok": False, "text": "Error: upstream", "structured": {"error": {"message": "503"}}, "error": "503"}
     assert parks_from_mcp_result(result) == []

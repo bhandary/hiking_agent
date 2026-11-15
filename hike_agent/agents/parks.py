@@ -9,7 +9,6 @@ Order of sources:
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable
 
 import requests
@@ -23,6 +22,7 @@ from hike_agent.services.nps import (
     fetch_parks_bundle,
     hike_titles,
     park_record,
+    parks_from_find_text,
     rank_parks,
 )
 from hike_agent.services.osm import nearby_outdoor_places
@@ -31,8 +31,6 @@ AGENT_NAME = "parks"
 AGENT_BRIEF = "Find nearby national parks, hiking activities, and current park alerts."
 
 McpCall = Callable[[Any, str, dict[str, Any], float], dict[str, Any]]
-PARK_HEADING = re.compile(r"^###\s+(?P<name>.+)$", re.MULTILINE)
-PARK_CODE = re.compile(r"\*\*parkCode:\*\*\s+(?P<code>[A-Za-z0-9]{3,6})")
 NPS_SOURCES = frozenset({"nps-mcp-local", "nps-mcp", "nps-api"})
 NOT_VERIFIED = "not verified by NPS"
 _NOT_A_PARK_QUERY = {"provided location", "me", "here", "current", "current location", "near me", "my location"}
@@ -68,20 +66,7 @@ def parks_from_mcp_result(result: dict[str, Any] | None) -> list[dict[str, Any]]
     items = _items(structured, "parks", "data")
     if items:
         return [park_record(item) for item in items]
-    text = result.get("text") or ""
-    parks: list[dict[str, Any]] = []
-    for match in PARK_HEADING.finditer(text):
-        window = text[match.end() : match.end() + 400]
-        code_match = PARK_CODE.search(window)
-        parks.append(
-            park_record(
-                {
-                    "fullName": match.group("name").strip(),
-                    "parkCode": code_match.group("code") if code_match else None,
-                }
-            )
-        )
-    return parks
+    return [park_record(park) for park in parks_from_find_text(result.get("text") or "")]
 
 
 def _apply_activity_payload(park: dict[str, Any], activities: dict[str, Any] | None, alerts: dict[str, Any] | None) -> None:
