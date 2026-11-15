@@ -310,3 +310,23 @@ def test_nps_http_error_does_not_include_the_api_key(settings: Settings):
     report = find_hikes(PLACE, settings=settings, mcp_call=mcp_down, get_json=get_json, overpass=lambda *_a, **_k: [])
     assert "secret-key" not in report["note"]
     assert "403" in report["note"]
+
+
+def test_coordinates_without_a_place_name_skip_the_park_name_search(settings):
+    def mcp_call(*_args):
+        raise AssertionError("NPS must not be queried for a placeholder or an empty name")
+
+    def get_json(_url, **kwargs):
+        assert "Provided location" not in str(kwargs.get("params"))
+        return []
+
+    for name in (None, "Provided location"):
+        report = find_hikes(
+            {"name": name, "latitude": 40.0, "longitude": -105.2, "state_code": None},
+            settings=settings,
+            mcp_call=mcp_call,
+            get_json=get_json,
+            overpass=lambda *_a, **_k: [],
+        )
+        assert "park-name search was skipped" in report["note"]
+        assert report["parks"] == []

@@ -69,8 +69,11 @@ def test_near_me_asks_for_a_place_instead_of_using_server_ip(settings):
 
 
 def test_near_me_uses_client_coordinates(settings):
-    def get_json(*_args, **_kwargs):
-        raise AssertionError("client coordinates must not geocode")
+    def get_json(url, **kwargs):
+        assert url.endswith("/reverse")
+        assert kwargs["params"]["lat"] == pytest.approx(40.0)
+        assert kwargs["params"]["lon"] == pytest.approx(-105.2)
+        return {"address": {"city": "Boulder", "state": "Colorado", "country": "United States"}}
 
     place = resolve_place(
         "me",
@@ -79,8 +82,43 @@ def test_near_me_uses_client_coordinates(settings):
         coordinates={"latitude": 40.0, "longitude": -105.2},
     )
     assert place["source"] == "client"
+    assert place["name"] == "Boulder"
+    assert place["state_code"] == "CO"
     assert place["latitude"] == pytest.approx(40.0)
     assert place["longitude"] == pytest.approx(-105.2)
+
+
+def test_client_coordinates_do_not_invent_a_place_name_when_reverse_fails(settings):
+    def get_json(*_args, **_kwargs):
+        raise TimeoutError("reverse down")
+
+    place = resolve_place(
+        "me",
+        settings=settings,
+        get_json=get_json,
+        coordinates={"latitude": 40.0, "longitude": -105.2},
+    )
+    assert place["source"] == "client"
+    assert place["name"] is None
+    assert place["latitude"] == pytest.approx(40.0)
+
+
+def test_activity_word_is_not_geocoded(settings):
+    def get_json(*_args, **_kwargs):
+        raise AssertionError("hike is not a place name")
+
+    place = resolve_place("hike", settings=settings, get_json=get_json)
+    assert place["latitude"] is None
+    assert place["source"] == "needs-location"
+
+
+def test_longitude_first_pair_is_not_a_client_point(settings):
+    def get_json(*_args, **_kwargs):
+        raise AssertionError("a sliced longitude must not be reverse geocoded")
+
+    place = resolve_place("me", settings=settings, get_json=get_json, coordinates="-105.271, 40.015")
+    assert place["source"] == "needs-location"
+    assert place["latitude"] is None
 
 
 def test_resolve_place_tool_is_a_langchain_tool():

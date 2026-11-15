@@ -35,6 +35,16 @@ PARK_HEADING = re.compile(r"^###\s+(?P<name>.+)$", re.MULTILINE)
 PARK_CODE = re.compile(r"\*\*parkCode:\*\*\s+(?P<code>[A-Za-z0-9]{3,6})")
 NPS_SOURCES = frozenset({"nps-mcp-local", "nps-mcp", "nps-api"})
 NOT_VERIFIED = "not verified by NPS"
+_NOT_A_PARK_QUERY = {"provided location", "me", "here", "current", "current location", "near me", "my location"}
+
+
+def _park_query_name(name: Any) -> str:
+    """City or park text safe to send as an NPS query. Placeholders are not."""
+
+    text = str(name or "").strip()
+    if not text or text.lower() in _NOT_A_PARK_QUERY:
+        return ""
+    return text
 
 
 def _items(structured: Any, *keys: str) -> list[dict[str, Any]]:
@@ -153,12 +163,20 @@ def find_hikes(
         return _report("none", "No coordinates, so park search was skipped.", [])
 
     notes: list[str] = []
+    search_name = _park_query_name(place.get("name"))
     arguments: dict[str, Any] = {"limit": 8}
     if place.get("state_code"):
         arguments["stateCode"] = place["state_code"]
-    if place.get("name"):
-        arguments["query"] = place["name"]
-    for source_name, target in _mcp_attempts(settings):
+    if search_name:
+        arguments["query"] = search_name
+    # A coordinate-only place has no city. Querying NPS for a placeholder such as
+    # "Provided location", or with no query at all, returns parks for the wrong place.
+    if not search_name and not place.get("state_code"):
+        notes.append("No place name or state, so the park-name search was skipped.")
+        attempts: list[tuple[str, Any]] = []
+    else:
+        attempts = _mcp_attempts(settings)
+    for source_name, target in attempts:
         found = mcp_call(target, "nps_find_parks", arguments, settings.nps_mcp_timeout)
         parks = rank_parks(parks_from_mcp_result(found), latitude, longitude, limit=4)
         if parks:
