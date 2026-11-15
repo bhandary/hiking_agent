@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -156,6 +156,20 @@ def test_mcp_alert_text_can_mark_a_forecast_unsafe():
     )
     assert report is not None
     assert report["risk"] == "unsafe"
+
+
+def test_a_date_more_than_a_week_out_is_still_requested(settings):
+    seen = {}
+    target = date.today() + timedelta(days=10)
+
+    def get_json(url, **kwargs):
+        if "open-meteo.com" in url:
+            seen["days"] = kwargs["params"]["forecast_days"]
+            return {"hourly": {}}
+        return {"features": []}
+
+    hiking_conditions(PLACE, settings=settings, mcp_call=mcp_down, get_json=get_json, today=target)
+    assert seen["days"] == 11
 
 
 def test_missing_coordinates_do_not_call_out():
