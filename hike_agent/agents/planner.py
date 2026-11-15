@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, timedelta
-from typing import Any, Callable
+from typing import Any, Callable, NamedTuple
 
 from hike_agent.agents.parks import NOT_VERIFIED, NPS_SOURCES
 from hike_agent.clock import today_in
@@ -112,11 +112,6 @@ _STOP_WORDS = frozenset(
         "with",
     }
 )
-_TEMPERATURE = re.compile(r"(-?\d+(?:\.\d+)?)\s*°?\s*([FC])\b", re.IGNORECASE)
-_MEASURE = re.compile(
-    r"\b(\d+(?:,\d{3})*(?:\.\d+)?)\s*(miles?|mi|kilometers?|km|feet|foot|ft|meters?|m)\b",
-    re.IGNORECASE,
-)
 _MONTH_DAY = re.compile(
     r"\b(?P<month>january|february|march|april|may|june|july|august|september|october|november|december|"
     r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(?P<year>\d{4}))?\b",
@@ -150,12 +145,108 @@ _WEEKDAY_INDEX = {
     "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
     "friday": 4, "saturday": 5, "sunday": 6,
 }
-_UNIT_FAMILY = {
-    "mile": "mi", "miles": "mi", "mi": "mi",
-    "kilometer": "km", "kilometers": "km", "km": "km",
-    "foot": "ft", "feet": "ft", "ft": "ft",
-    "meter": "m", "meters": "m", "m": "m",
+
+
+class NumberToken(NamedTuple):
+    """One number taken from text, including a sign, a unit, and a range end."""
+
+    value: float
+    sign: str
+    unit: str
+    span: tuple[int, int]
+    in_range: bool
+
+
+# Thousands groups before a plain decimal, so "1,200" and "4.9" stay whole.
+_NUMBER_BODY = re.compile(r"\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+\.\d+|\d+")
+_NUMBER_UNIT = re.compile(
+    r"\s*°?\s*(?P<unit>miles|mile|kilometers|kilometer|km|feet|foot|ft|meters|meter|mi|m|f|c|%)(?!\w)",
+    re.IGNORECASE,
+)
+_UNIT_CANON = {
+    "f": "F",
+    "c": "C",
+    "mile": "mi",
+    "miles": "mi",
+    "mi": "mi",
+    "kilometer": "km",
+    "kilometers": "km",
+    "km": "km",
+    "foot": "ft",
+    "feet": "ft",
+    "ft": "ft",
+    "meter": "m",
+    "meters": "m",
+    "m": "m",
+    "%": "%",
 }
+
+
+def _fold_number_dashes(text: str) -> str:
+    """Fold the unicode minus and the en dash to an ASCII hyphen.
+
+    A hyphen between digits is a range (``40-45 F``, ``40–45 F``). A hyphen is
+    a sign only when no digit or letter stands immediately before it
+    (``-5 F``, ``−5 F``, or an en dash used the same way). The start and the
+    end of the string are boundaries, not signs.
+    """
+
+    return text.replace("\u2212", "-").replace("\u2013", "-")
+
+
+def extract_numbers(text: str) -> list[NumberToken]:
+    """Numbers in ``text``, each with its value, sign, unit, span, and range membership.
+
+    ``40-45 F`` records both ends, 40 and 45, as positive Fahrenheit and marks
+    them as members of a range. It does not record -45. ``1,200`` is one
+    value, and ``4.9`` is not 49 or 9. A number may sit at the start or the
+    end of the string.
+    """
+
+    if not text:
+        return []
+    folded = _fold_number_dashes(text)
+    tokens: list[NumberToken] = []
+    for match in _NUMBER_BODY.finditer(folded):
+        body_start, body_end = match.span()
+        prev = folded[body_start - 1] if body_start else ""
+        before_prev = folded[body_start - 2] if body_start >= 2 else ""
+        sign = ""
+        token_start = body_start
+        range_end = False
+        # Membership is a character test. ``"" in "+-"`` is true in Python,
+        # and that is what used to reject a number at the start of the text.
+        if prev in ("+", "-") and not before_prev.isdigit() and not before_prev.isalpha():
+            sign = prev
+            token_start = body_start - 1
+        elif prev == "-" and before_prev.isdigit():
+            range_end = True
+        unit = ""
+        token_end = body_end
+        unit_match = _NUMBER_UNIT.match(folded, body_end)
+        if unit_match:
+            unit = _UNIT_CANON[unit_match.group("unit").lower()]
+            token_end = unit_match.end()
+        if range_end and tokens and folded[tokens[-1].span[1] : body_start] == "-":
+            left = tokens[-1]
+            shared_unit = unit or left.unit
+            tokens[-1] = left._replace(unit=shared_unit, in_range=True)
+        else:
+            range_end = False
+        tokens.append(
+            NumberToken(
+                value=float(match.group(0).replace(",", "")),
+                sign=sign,
+                unit=unit,
+                span=(token_start, token_end),
+                in_range=range_end,
+            )
+        )
+    return tokens
+
+
+def _same_quantity(claim: NumberToken, fact: NumberToken) -> bool:
+    return claim.value == fact.value and claim.sign == fact.sign and claim.unit == fact.unit
 
 
 def _nps_verified(park: dict[str, Any], report: dict[str, Any]) -> bool:
@@ -453,11 +544,12 @@ def _temperature_conflicts(text: str, summary: str, facts: str) -> list[str]:
 
 def _temperatures_c(text: str) -> list[tuple[str, float]]:
     found = []
-    for match in _TEMPERATURE.finditer(text or ""):
-        value = float(match.group(1))
-        unit = match.group(2).upper()
-        celsius = value if unit == "C" else (value - 32) * 5 / 9
-        found.append((match.group(0), celsius))
+    for token in extract_numbers(text):
+        if token.unit not in ("F", "C"):
+            continue
+        signed = -token.value if token.sign == "-" else token.value
+        celsius = signed if token.unit == "C" else (signed - 32) * 5 / 9
+        found.append((text[token.span[0] : token.span[1]].strip(), celsius))
     return found
 
 
@@ -530,59 +622,30 @@ def _measure_conflicts(text: str, facts: str) -> list[str]:
 
 
 def _verbatim_in_tools(spoken: str, facts: str) -> bool:
-    """True when the number or date is copied from tool text, not sliced from a longer one.
+    """True when every number in ``spoken`` is the same quantity in ``facts``.
 
-    ``9 F`` is not ``49 F``, ``November 2`` is not ``November 21``, and ``2 miles``
-    is not ``12 miles``. A decimal point is part of the number, so ``4.9`` is not
-    ``49`` and not the trailing ``9``.
+    Comparison uses ``extract_numbers``, so ``9 F`` is not ``49 F``,
+    ``November 2`` is not ``November 21``, ``5 F`` is not ``-5 F``, and a
+    range end matches on its own (``40 F`` and ``45 F`` are both in
+    ``40-45 F``). A claim with no number, such as a weekday, must appear as
+    its own word.
     """
 
-    needle = " ".join(spoken.lower().split())
-    haystack = " ".join((facts or "").lower().split())
-    if not needle:
-        return False
-    start = 0
-    while True:
-        index = haystack.find(needle, start)
-        if index < 0:
+    claim_numbers = extract_numbers(spoken)
+    if not claim_numbers:
+        needle = " ".join((spoken or "").lower().split())
+        haystack = " ".join((facts or "").lower().split())
+        if not needle:
             return False
-        if _number_is_bounded(haystack, index, index + len(needle)):
-            return True
-        start = index + 1
-
-
-# ASCII plus, ASCII hyphen-minus, and the unicode minus (U+2212).
-_NUMBER_SIGNS = "+-\u2212"
-
-
-def _number_is_bounded(text: str, start: int, end: int) -> bool:
-    """No digit, decimal continuation, or leading sign touches this match.
-
-    A hyphen with a digit on its left is a range, not a sign. Claim ``45 F``
-    against tool text ``40-45 F`` is the high end of that range: a digit
-    precedes the ``-``, so the match is accepted. Claim ``5 F`` against
-    ``-5 F`` has no digit before the sign, so it is rejected. The same rule
-    applies to ``+`` and the unicode minus.
-    """
-
-    before = text[start - 1] if start > 0 else ""
-    after = text[end] if end < len(text) else ""
-    if before.isdigit() or after.isdigit():
+        return re.search(rf"(?<!\w){re.escape(needle)}(?!\w)", haystack) is not None
+    fact_numbers = extract_numbers(facts)
+    if not all(any(_same_quantity(claim, fact) for fact in fact_numbers) for claim in claim_numbers):
         return False
-    starts_digit = start < len(text) and text[start].isdigit()
-    ends_digit = end > 0 and text[end - 1].isdigit()
-    if before in _NUMBER_SIGNS and starts_digit:
-        preceded_by_digit = start > 1 and text[start - 2].isdigit()
-        if not preceded_by_digit:
-            return False
-    if before == "." and starts_digit:
-        return False
-    if before == "," and starts_digit and start > 1 and text[start - 2].isdigit():
-        return False
-    if after == "." and ends_digit and end + 1 < len(text) and text[end + 1].isdigit():
-        return False
-    if after == "," and ends_digit and end + 1 < len(text) and text[end + 1].isdigit():
-        return False
+    for pattern in (_MONTH_DAY, _DAY_MONTH):
+        for match in pattern.finditer(spoken or ""):
+            month = match.group("month")
+            if not re.search(rf"\b{re.escape(month)}\b", facts or "", re.IGNORECASE):
+                return False
     return True
 
 
@@ -639,10 +702,11 @@ def _ensure_date_risk_language(body: str, state: dict[str, Any]) -> str:
 
 def _measures(text: str) -> list[tuple[str, tuple[float, str]]]:
     found = []
-    for match in _MEASURE.finditer(text or ""):
-        number = float(match.group(1).replace(",", ""))
-        family = _UNIT_FAMILY[match.group(2).lower()]
-        found.append((match.group(0), (number, family)))
+    for token in extract_numbers(text):
+        if token.unit not in ("mi", "km", "ft", "m"):
+            continue
+        signed = -token.value if token.sign == "-" else token.value
+        found.append((text[token.span[0] : token.span[1]].strip(), (signed, token.unit)))
     return found
 
 

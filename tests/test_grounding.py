@@ -3,9 +3,13 @@
 import copy
 from datetime import date
 
+import pytest
+
 from hike_agent.agents.planner import (
     PLANNER_SYSTEM,
+    _temperature_conflicts,
     _verbatim_in_tools,
+    extract_numbers,
     ground_recommendation,
     invented_place_names,
     render_brief,
@@ -161,6 +165,70 @@ def test_a_signed_temperature_is_not_the_unsigned_number():
     kept, how = check("40-45 F", "It will be 45 F. Hike Bear Lake Trail.")
     assert how == "model"
     assert "45 F" in kept
+
+
+def test_a_forecast_range_accepts_both_ends_and_not_the_negative():
+    def check(summary: str, text: str):
+        state = copy.deepcopy(STATE)
+        state["conditions"]["summary"] = summary
+        state["conditions"]["safety_notes"] = []
+        return ground_recommendation(text, state, lambda _prompt: text)
+
+    for summary in ("40-45 F", "40\u201345 F"):
+        kept_low, how = check(summary, "It will be 40 F. Hike Bear Lake Trail.")
+        assert how == "model"
+        assert "40 F" in kept_low
+        kept_high, how = check(summary, "It will be 45 F. Hike Bear Lake Trail.")
+        assert how == "model"
+        assert "45 F" in kept_high
+        dropped, how = check(summary, "It will be -45 F. Hike Bear Lake Trail.")
+        assert how == "grounded"
+        assert "It will be -45 F." not in dropped
+
+    tokens = extract_numbers("40-45 F")
+    assert [(token.value, token.sign, token.unit, token.in_range) for token in tokens] == [
+        (40.0, "", "F", True),
+        (45.0, "", "F", True),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("facts", "claim", "verbatim", "celsius_ok"),
+    [
+        ("40-45 F", "40 F", True, True),
+        ("40-45 F", "45 F", True, True),
+        ("40-45 F", "-45 F", False, False),
+        ("40\u201345 F", "40 F", True, True),
+        ("40\u201345 F", "45 F", True, True),
+        ("40\u201345 F", "-45 F", False, False),
+        ("12.5 miles to the lake", "12.5 miles", True, None),
+        ("1,200 miles", "1,200 miles", True, None),
+        ("\u22125 F", "5 F", False, False),
+        ("\u22125 F", "-5 F", True, True),
+        ("\u22125 F", "\u22125 F", True, True),
+        ("\u20135 F", "5 F", False, False),
+        ("\u20135 F", "-5 F", True, True),
+        ("\u20135 F", "\u20135 F", True, True),
+        ("49 F", "9 F", False, False),
+        ("November 21", "November 2", False, None),
+        ("November 21", "November 21", True, None),
+        ("-5.5 F", "-5.5 F", True, True),
+        ("-5.5 F", "5.5 F", False, False),
+        ("12 miles", "2 miles", False, None),
+        ("4.9 F", "4.9 F", True, True),
+        ("4.9 F", "9 F", False, False),
+        ("4.9 F", "49 F", False, False),
+    ],
+)
+def test_number_tokens_drive_verbatim_and_celsius(facts, claim, verbatim, celsius_ok):
+    assert _verbatim_in_tools(claim, facts) is verbatim
+    if facts.startswith("12.5"):
+        assert extract_numbers(facts)[0].span[0] == 0
+    conflicts = _temperature_conflicts(claim, facts, facts)
+    if celsius_ok is None:
+        assert conflicts == []
+    else:
+        assert (conflicts == []) is celsius_ok
 
 
 def test_numbers_and_dates_copied_from_tool_results_are_kept():
