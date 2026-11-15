@@ -192,6 +192,60 @@ def test_a_forecast_range_accepts_both_ends_and_not_the_negative():
     ]
 
 
+def test_a_negative_hyphen_range_applies_the_minus_to_both_ends():
+    def check(text: str):
+        state = copy.deepcopy(STATE)
+        state["conditions"]["summary"] = "-10-5 F"
+        state["conditions"]["safety_notes"] = []
+        return ground_recommendation(text, state, lambda _prompt: text)
+
+    for claim in ("-10 F", "-5 F"):
+        kept, how = check(f"It will be {claim}. Hike Bear Lake Trail.")
+        assert how == "model"
+        assert f"It will be {claim}." in kept
+    dropped, how = check("It will be 5 F. Hike Bear Lake Trail.")
+    assert how == "grounded"
+    assert "It will be 5 F." not in dropped
+    assert [(token.value, token.sign, token.unit) for token in extract_numbers("-10-5 F")] == [
+        (10.0, "-", "F"),
+        (5.0, "-", "F"),
+    ]
+
+
+def test_same_unit_forecasts_match_exactly_and_cross_unit_keeps_tolerance():
+    def check(summary: str, text: str):
+        state = copy.deepcopy(STATE)
+        state["conditions"]["summary"] = summary
+        state["conditions"]["safety_notes"] = []
+        return ground_recommendation(text, state, lambda _prompt: text)
+
+    dropped, how = check("40-45 F", "It will be 41-43 F. Hike Bear Lake Trail.")
+    assert how == "grounded"
+    assert "It will be 41-43 F." not in dropped
+    assert _temperature_conflicts("41-43 F", "40-45 F", "40-45 F")
+
+    kept, how = check("45 F", "It will be 7 C. Hike Bear Lake Trail.")
+    assert how == "model"
+    assert "It will be 7 C." in kept
+    assert _temperature_conflicts("7 C", "45 F", "45 F") == []
+
+
+def test_a_to_range_shares_its_unit_with_both_ends():
+    def check(summary: str, text: str):
+        state = copy.deepcopy(STATE)
+        state["conditions"]["summary"] = summary
+        state["conditions"]["safety_notes"] = []
+        return ground_recommendation(text, state, lambda _prompt: text)
+
+    for claim in ("40 F", "45 F"):
+        kept, how = check("40 to 45 F", f"It will be {claim}. Hike Bear Lake Trail.")
+        assert how == "model"
+        assert f"It will be {claim}." in kept
+    kept, how = check("-10 to -5 F", "It will be -10 F. Hike Bear Lake Trail.")
+    assert how == "model"
+    assert "It will be -10 F." in kept
+
+
 @pytest.mark.parametrize(
     ("facts", "claim", "verbatim", "celsius_ok"),
     [

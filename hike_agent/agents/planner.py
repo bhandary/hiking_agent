@@ -198,9 +198,10 @@ def extract_numbers(text: str) -> list[NumberToken]:
     """Numbers in ``text``, each with its value, sign, unit, span, and range membership.
 
     ``40-45 F`` records both ends, 40 and 45, as positive Fahrenheit and marks
-    them as members of a range. It does not record -45. ``1,200`` is one
-    value, and ``4.9`` is not 49 or 9. A number may sit at the start or the
-    end of the string.
+    them as members of a range. It does not record -45. ``-10-5 F`` records
+    -10 and -5: a negative left end covers an unsigned right end. ``40 to 45 F``
+    gives that unit to both ends. ``1,200`` is one value, and ``4.9`` is not
+    49 or 9. A number may sit at the start or the end of the string.
     """
 
     if not text:
@@ -231,6 +232,18 @@ def extract_numbers(text: str) -> list[NumberToken]:
             left = tokens[-1]
             shared_unit = unit or left.unit
             tokens[-1] = left._replace(unit=shared_unit, in_range=True)
+            # "-10-5" is -10 to -5. The right hyphen is the range, not a plus.
+            if left.sign == "-" and not sign:
+                sign = "-"
+        elif tokens and re.fullmatch(
+            r"\s+to\s+", folded[tokens[-1].span[1] : token_start], re.IGNORECASE
+        ):
+            left = tokens[-1]
+            if unit and not left.unit:
+                tokens[-1] = left._replace(unit=unit, in_range=True)
+            else:
+                tokens[-1] = left._replace(in_range=True)
+            range_end = True
         else:
             range_end = False
         tokens.append(
@@ -531,25 +544,35 @@ def _temperature_conflicts(text: str, summary: str, facts: str) -> list[str]:
     claimed = _temperatures_c(text)
     if not claimed:
         return []
-    allowed = [celsius for _original, celsius in _temperatures_c(summary)]
+    allowed = _temperatures_c(summary)
     conflicts = []
-    for original, celsius in claimed:
+    for original, celsius, unit, signed in claimed:
         if _verbatim_in_tools(original, facts):
             continue
-        if any(abs(celsius - known) <= 1.5 for known in allowed):
+        # 41 F is not inside 40-45 F. The 1.5 C window is only for a different
+        # unit, such as 7 C next to 45 F.
+        same_unit = [known for _spoken, _celsius, known_unit, known in allowed if known_unit == unit]
+        if same_unit:
+            if signed in same_unit:
+                continue
+        elif any(
+            abs(celsius - known_celsius) <= 1.5
+            for _spoken, known_celsius, known_unit, _known in allowed
+            if known_unit != unit
+        ):
             continue
         conflicts.append(f"temperature not in the forecast: {original}")
     return conflicts
 
 
-def _temperatures_c(text: str) -> list[tuple[str, float]]:
+def _temperatures_c(text: str) -> list[tuple[str, float, str, float]]:
     found = []
     for token in extract_numbers(text):
         if token.unit not in ("F", "C"):
             continue
         signed = -token.value if token.sign == "-" else token.value
         celsius = signed if token.unit == "C" else (signed - 32) * 5 / 9
-        found.append((text[token.span[0] : token.span[1]].strip(), celsius))
+        found.append((text[token.span[0] : token.span[1]].strip(), celsius, token.unit, signed))
     return found
 
 
