@@ -79,10 +79,15 @@ def _empty(query: str, note: str, source: str = "none") -> dict[str, Any]:
 
 
 def _is_near_me(text: str) -> bool:
-    lowered = " ".join(text.lower().split())
+    lowered = " ".join(re.sub(r"[?!.,;:]+", " ", text.lower()).split())
     if lowered in NEAR_ME:
         return True
     without_coords = re.sub(r"[+-]?\d{1,2}\.\d+\s*,\s*[+-]?\d{1,3}\.\d+", " ", lowered)
+    without_coords = re.sub(
+        r"\b(?:day\s*hikes?|dayhike|overnight(?:\s+hikes?)?|hikes?|hiking)\b",
+        " ",
+        without_coords,
+    )
     without_coords = _NEAR_WORDS.sub(" ", without_coords)
     without_coords = " ".join(without_coords.split())
     return without_coords in NEAR_ME

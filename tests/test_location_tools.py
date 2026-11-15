@@ -69,6 +69,15 @@ def test_near_me_asks_for_a_place_instead_of_using_server_ip(settings):
     assert here["source"] == "needs-location"
 
 
+def test_near_me_punctuation_and_hike_wording_do_not_geocode(settings):
+    def get_json(*_args, **_kwargs):
+        raise AssertionError("near me must not geocode")
+
+    for query in ("me!", "near me!", "hike near me", "day hike near me"):
+        place = resolve_place(query, settings=settings, get_json=get_json)
+        assert place["source"] == "needs-location", query
+
+
 def test_near_me_uses_client_coordinates(settings):
     def get_json(*_args, **_kwargs):
         raise AssertionError("client coordinates must not geocode")

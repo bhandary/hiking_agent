@@ -68,6 +68,11 @@ def test_near_wins_over_an_earlier_in():
     assert found["place"] == "Boulder"
 
 
+def test_near_me_exclamation_stays_near_me():
+    found = extract_hike_request("near me!", today=SATURDAY)
+    assert found["place"] == "me"
+
+
 def test_day_hike_this_saturday_leaves_a_clean_place():
     found = extract_hike_request("day hike near Boulder, CO this Saturday", today=FRIDAY)
     assert found["place"] == "Boulder, CO"
