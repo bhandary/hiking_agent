@@ -12,7 +12,8 @@ A supervisor model that picks the next agent can skip the weather call or name a
 
 ```mermaid
 flowchart TD
-  user["CLI query"] --> location["Location agent"]
+  user["CLI query or chat message"] --> extract["Place and date"]
+  extract --> location["Location agent"]
   location --> parks["Parks and trails agent"]
   location --> weather["Weather agent"]
   parks --> planner["Planner agent"]
@@ -75,6 +76,26 @@ python -m hike_agent me --chat
 
 `--chat` asks follow-up questions after the recommendation. That loop needs a reachable model. `--json` prints the graph state.
 
+A sentence is accepted as well as a bare place. `hikes near Boulder this weekend` is read as Boulder plus the coming Saturday and Sunday. `Boulder, Colorado` is still just a place.
+
+## Chat UI
+
+The `ui/` directory is a vendored copy of [agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui) (MIT, Copyright (c) 2025 Brace Sproul). It is a directory, not a submodule, so the Docker build does not clone a second repository. `ui/VENDORED.md` records the upstream commit.
+
+The UI talks to a LangGraph server. `langgraph.json` exposes the graph id `hike_planner`. That graph reads the latest chat message, extracts the place and date, runs the same fixed flow as the CLI, and returns the planner text as an assistant message. The server streams that message on the `messages` channel.
+
+`langgraph dev` is the server. It is the in-memory Agent Server from `langgraph-cli[inmem]`. It implements the threads and runs API the UI uses, and it does not need a LangSmith key. `langgraph up` is the licensed production server, so this project does not use it.
+
+```bash
+pip install -r requirements.txt
+cd ui && pnpm install && cd ..
+cp .env.example .env
+cp ui/.env.example ui/.env
+make dev
+```
+
+`make dev` starts the API at `http://127.0.0.1:2024` and the UI at `http://127.0.0.1:3000`. The UI defaults are `NEXT_PUBLIC_API_URL=http://localhost:2024` and `NEXT_PUBLIC_ASSISTANT_ID=hike_planner`. `make server` and `make ui` start them separately.
+
 ## Tests
 
 ```bash
@@ -105,6 +126,13 @@ Copy `.env.example`. Do not commit a filled-in `.env`.
 | `WEATHER_MCP_TIMEOUT_SECONDS` | How long to wait before the weather fallback |
 | `HTTP_TIMEOUT_SECONDS` | Timeout for direct API calls |
 | `HIKE_USER_AGENT` | Sent to NWS, Nominatim, and Overpass |
+| `PORT` | Port for `langgraph dev`. Railway sets this. Local default is 2024 |
+| `CORS_ALLOW_ORIGINS` | Browser origins allowed to call the API. Default `*` |
+| `NEXT_PUBLIC_API_URL` | UI build-time URL of the LangGraph server. Local default `http://localhost:2024` |
+| `NEXT_PUBLIC_ASSISTANT_ID` | Graph id. This repo uses `hike_planner` |
+| `NEXT_PUBLIC_AUTH_SCHEME` | Leave empty. Not used for the in-memory server |
+| `LANGGRAPH_API_URL` | Optional server-side proxy target. Unused by the default UI setup |
+| `LANGSMITH_API_KEY` | Not required. Leave empty |
 
 ## Layout
 
@@ -112,13 +140,55 @@ Copy `.env.example`. Do not commit a filled-in `.env`.
 hike_agent/
   cli.py            command line
   graph.py          LangGraph supervisor
+  chat_graph.py     messages graph for the chat UI
+  http_app.py       GET /health for the LangGraph server
+  extract.py        place and date from a chat message
   model.py          Ollama or OpenAI chat model
   mcp_bridge.py     MCPAdapter tool calls
   agents/           location, parks, weather, planner
   services/         direct HTTP clients
-tests/              tool tests and one graph test
+langgraph.json      graph id hike_planner and the health app
+ui/                 vendored agent-chat-ui
+Dockerfile          backend image (Python, Node, langgraph dev)
+railway.toml        backend Railway service
+tests/              tool tests and graph tests
 main.py             same entrypoint as python -m hike_agent
 ```
+
+## Deploy to Railway
+
+Two services from this repo. Do not use `langgraph up`. That command builds the licensed Agent Server and, in production, requires `LANGGRAPH_CLOUD_LICENSE_KEY`. The image here runs `langgraph dev` from `langgraph-cli[inmem]` instead:
+
+- It serves the same HTTP API the chat UI calls (`/info`, threads, streamed runs).
+- Threads live in memory. A restart clears them. That is enough for this planner.
+- `GET /health` comes from `hike_agent/http_app.py`, mounted in `langgraph.json`, so Railway can healthcheck the process.
+- The process binds `0.0.0.0` and `$PORT`.
+
+The backend image also installs Node 22. The weather MCP server, and the local NPS MCP server when `NPS_API_KEY` is set, start with `npx`. If that process fails, the agents fall back to Open-Meteo, `api.weather.gov`, the NPS REST API, and OpenStreetMap.
+
+The Python default for `MODEL_PROVIDER` stays `ollama`, so a laptop still uses local GPT-OSS. The backend image sets `MODEL_PROVIDER=openai`. Set `OPENAI_API_KEY` on the Railway backend service. Without that key the planner still answers, using the factual brief instead of a model.
+
+**Backend service**
+
+- Name it `hike-api`. The frontend reference below uses that name.
+- Root directory: repository root.
+- Builder: Dockerfile (`railway.toml` sets the healthcheck to `/health`).
+- Variables: `OPENAI_API_KEY`, and `NPS_API_KEY` if you want National Park Service data. `MODEL_PROVIDER=openai` is already in the image. Leave `OLLAMA_BASE_URL` unset.
+
+**Frontend service**
+
+- Root directory: `ui`.
+- Builder: Dockerfile (`ui/railway.toml` healthchecks `/health`).
+- `NEXT_PUBLIC_*` is inlined when Next.js builds. Set these before the build, using a Railway reference variable for the backend domain:
+
+```
+NEXT_PUBLIC_API_URL=https://${{hike-api.RAILWAY_PUBLIC_DOMAIN}}
+NEXT_PUBLIC_ASSISTANT_ID=hike_planner
+```
+
+Changing `NEXT_PUBLIC_API_URL` requires a new frontend build. The UI container listens on `0.0.0.0` and `$PORT`.
+
+The browser calls the backend URL directly. The Agent Server allows every origin unless you set `CORS_ALLOW_ORIGINS`. No LangSmith key is required on either service.
 
 ## Safety
 

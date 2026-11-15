@@ -10,6 +10,7 @@ both reports.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import date
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -21,6 +22,23 @@ from hike_agent.agents.weather import hiking_conditions as default_hiking_condit
 from hike_agent.state import HikeState
 
 Complete = Callable[[str], str]
+
+
+def _forecast_day(when: Any) -> date | None:
+    """Date the weather agent should summarize, when the request named one."""
+
+    if not isinstance(when, dict):
+        return None
+    start = when.get("start") or ""
+    if not start:
+        return None
+    try:
+        day = date.fromisoformat(str(start))
+    except ValueError:
+        return None
+    if day < date.today():
+        return date.today()
+    return day
 
 
 def _has_coordinates(state: HikeState) -> bool:
@@ -53,7 +71,15 @@ def build_graph(
         }
 
     def weather_node(state: HikeState) -> dict[str, Any]:
-        report = hiking_conditions(state.get("place") or {})
+        place = state.get("place") or {}
+        day = _forecast_day(state.get("when"))
+        if day is None:
+            report = hiking_conditions(place)
+        else:
+            try:
+                report = hiking_conditions(place, today=day)
+            except TypeError:
+                report = hiking_conditions(place)
         return {
             "conditions": report,
             "trace": [f"weather: {report.get('risk', 'unknown')} risk via {report.get('source')}"],

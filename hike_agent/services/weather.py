@@ -204,6 +204,7 @@ def fetch_open_meteo_and_alerts(
     timeout: float,
     user_agent: str,
     today: date | None = None,
+    forecast_days: int = 2,
 ) -> dict[str, Any]:
     """Direct-API weather report used when the weather MCP server is down."""
 
@@ -213,7 +214,7 @@ def fetch_open_meteo_and_alerts(
             "latitude": latitude,
             "longitude": longitude,
             "hourly": "temperature_2m,precipitation_probability,weather_code",
-            "forecast_days": 2,
+            "forecast_days": forecast_days,
             "timezone": "auto",
         },
         timeout=timeout,

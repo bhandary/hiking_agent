@@ -107,6 +107,46 @@ def test_graph_uses_the_template_when_the_model_fails():
     assert "ConnectionError" in state["errors"][0]
 
 
+def test_named_date_reaches_weather_and_the_brief():
+    seen = {}
+
+    def hiking_conditions(place, today=None):
+        seen["today"] = today
+        return CONDITIONS
+
+    def complete(brief: str) -> str:
+        seen["brief"] = brief
+        return "Hike later."
+
+    graph = build_graph(lambda _query: PLACE, lambda _place: PARKS, hiking_conditions, complete)
+    graph.invoke(
+        {
+            "query": "Boulder",
+            "when": {"label": "November 20 (2099-11-20)", "start": "2099-11-20", "end": "2099-11-20"},
+            "errors": [],
+            "trace": [],
+        }
+    )
+    assert seen["today"].isoformat() == "2099-11-20"
+    assert "When: November 20 (2099-11-20)" in seen["brief"]
+
+
+def test_weather_fake_without_a_date_argument_still_runs():
+    def hiking_conditions(place):
+        return CONDITIONS
+
+    graph = build_graph(lambda _query: PLACE, lambda _place: PARKS, hiking_conditions, lambda _brief: "ok")
+    state = graph.invoke(
+        {
+            "query": "Boulder",
+            "when": {"label": "this weekend", "start": "2099-11-20", "end": "2099-11-21"},
+            "errors": [],
+            "trace": [],
+        }
+    )
+    assert state["conditions"]["source"] == "open-meteo+nws"
+
+
 def test_graph_skips_remote_agents_when_location_fails():
     seen = {}
 

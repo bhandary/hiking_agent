@@ -20,6 +20,17 @@ from hike_agent.services.weather import fetch_open_meteo_and_alerts
 AGENT_NAME = "weather"
 AGENT_BRIEF = "Summarize daylight hiking conditions and active weather alerts."
 
+
+def _forecast_horizon(today: date | None) -> int:
+    """How many forecast days to request so ``today`` is inside the window."""
+
+    if today is None:
+        return 2
+    delta = (today - date.today()).days
+    if delta <= 1:
+        return 2
+    return min(delta + 1, 7)
+
 McpCall = Callable[[Any, str, dict[str, Any], float], dict[str, Any]]
 
 _UNSAFE_PHRASES = (
@@ -129,7 +140,7 @@ def hiking_conditions(
         forecast_arguments = {
             "latitude": latitude,
             "longitude": longitude,
-            "days": 2,
+            "days": _forecast_horizon(today),
             "granularity": "daily",
             "include_precipitation_probability": True,
             "source": "auto",
@@ -156,6 +167,7 @@ def hiking_conditions(
             timeout=settings.http_timeout,
             user_agent=settings.user_agent,
             today=today,
+            forecast_days=_forecast_horizon(today),
         )
     except Exception as exc:  # noqa: BLE001
         return {

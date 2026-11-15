@@ -14,6 +14,7 @@ class HikeState(TypedDict, total=False):
     """
 
     query: str
+    when: dict[str, Any]
     place: dict[str, Any] | None
     parks: dict[str, Any] | None
     conditions: dict[str, Any] | None

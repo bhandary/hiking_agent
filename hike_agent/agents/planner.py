@@ -37,7 +37,11 @@ def render_brief(state: dict[str, Any]) -> str:
     parks_report = state.get("parks") or {}
     conditions = state.get("conditions") or {}
     label = place.get("label") or state.get("query") or "the requested place"
-    lines = [f"Hike plan for {label}", ""]
+    when = state.get("when") or {}
+    lines = [f"Hike plan for {label}"]
+    if isinstance(when, dict) and when.get("label"):
+        lines.append(f"When: {when['label']}")
+    lines.append("")
     lines.append("Conditions")
     lines.append(conditions.get("summary") or "Weather was not available.")
     lines.append(f"Risk: {conditions.get('risk') or 'unknown'}.")

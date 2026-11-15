@@ -11,3 +11,6 @@ build/
 
 # Secrets
 .env
+
+# LangGraph dev server cache
+.langgraph_api/

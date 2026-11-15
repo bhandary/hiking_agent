@@ -8,11 +8,12 @@ import sys
 from typing import Any
 
 from hike_agent.config import get_settings
+from hike_agent.extract import extract_hike_request
 from hike_agent.graph import build_graph
 from hike_agent.model import make_complete
 
 
-def plan_hike(query: str, *, complete=None, settings=None) -> dict[str, Any]:
+def plan_hike(query: str, *, complete=None, settings=None, when=None) -> dict[str, Any]:
     """Run the graph for one place query and return the final state."""
 
     settings = settings or get_settings()
@@ -23,7 +24,7 @@ def plan_hike(query: str, *, complete=None, settings=None) -> dict[str, Any]:
             print(f"Model setup skipped: {exc}", file=sys.stderr)
             complete = None
     graph = build_graph(complete=complete)
-    return graph.invoke({"query": query, "errors": [], "trace": []})
+    return graph.invoke({"query": query, "when": when or {}, "errors": [], "trace": []})
 
 
 def format_sources(state: dict[str, Any]) -> str:
@@ -83,8 +84,14 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"Model setup skipped: {exc}", file=sys.stderr)
 
+    extracted = extract_hike_request(args.place)
     try:
-        state = plan_hike(args.place, complete=complete, settings=settings)
+        state = plan_hike(
+            extracted["place"],
+            complete=complete,
+            settings=settings,
+            when=extracted.get("when") or {},
+        )
     except Exception as exc:  # noqa: BLE001
         print(f"Hike planner failed: {exc}", file=sys.stderr)
         return 1

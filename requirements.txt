@@ -2,5 +2,7 @@ langchain[mcp]>=1.5.0,<2
 langgraph>=1.2.22,<2
 langchain-ollama>=1.1.0,<2
 langchain-openai>=1.0,<2
+langgraph-cli[inmem]>=0.4.43,<0.5
+fastapi>=0.115
 requests>=2.32
 geocoder>=1.38
