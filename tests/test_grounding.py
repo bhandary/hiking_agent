@@ -31,5 +31,10 @@ def test_an_invented_prefix_on_a_real_trail_is_rejected():
     assert found == ["Imaginary Bear Lake", "Imaginary Bear Lake Trail"]
 
 
+def test_a_lowercase_invented_trail_is_rejected():
+    found = invented_place_names("Try imaginary peak trail at dawn.", _state())
+    assert [name.lower() for name in found] == ["imaginary peak", "imaginary peak trail"]
+
+
 def test_a_generic_national_park_phrase_is_not_treated_as_invented():
     assert invented_place_names("Visit National Park this weekend.", _state()) == []

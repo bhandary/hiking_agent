@@ -221,15 +221,12 @@ def _place_candidates(text: str) -> list[str]:
 def invented_place_names(text: str, state: dict[str, Any]) -> list[str]:
     """Park or trail names in ``text`` that no tool returned.
 
-    A name with no capital letter is left for a later check. This pass only
-    stops a capitalized invented name that merely contains a real trail.
+    Lowercase names are included. A title-case requirement missed those.
     """
 
     allowed = allowed_place_names(state)
     invented: list[str] = []
     for name in _place_candidates(text):
-        if not any(character.isupper() for character in name):
-            continue
         if not _distinctive(_tokens(name)):
             continue
         if name not in invented and not _name_allowed(name, allowed):
