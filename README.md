@@ -37,7 +37,7 @@ Weather, in order:
 1. **[@dangahagan/weather-mcp](https://github.com/weather-mcp/weather-mcp)** via `npx`. Keyless. NOAA for US points, Open-Meteo elsewhere, plus alerts (`get_forecast`, `get_alerts`).
 2. **Open-Meteo hourly forecast** and **api.weather.gov alerts**. The daylight summary (08:00–17:00, average temperature, common conditions, highest precipitation chance) matches the original script. NWS alerts can mark the day unsafe even when the sky looks clear.
 
-Location uses the Open-Meteo geocoding API. It is keyless and does not start a subprocess. `me` still uses this machine's public IP, as the original script did.
+Location uses the Open-Meteo geocoding API. It is keyless and does not start a subprocess. `me` and `near me` do not use this server's IP address. Say a city or park name, or pass coordinates (`--lat` and `--lon` on the CLI, or `coordinates` on the graph input). An unknown place stops with a short message instead of a hike plan.
 
 Other MCP servers that were considered, and why they are not the default:
 
@@ -67,12 +67,12 @@ Weather MCP needs Node.js on `PATH` when `WEATHER_MCP_ENABLED` is true. The park
 ```bash
 python -m hike_agent "Boulder, Colorado"
 python main.py "Yosemite Valley"
-python -m hike_agent me --chat
+python -m hike_agent me --lat 40.015 --lon -105.271
 ```
 
 `--chat` asks follow-up questions after the recommendation. That loop needs a reachable model. `--json` prints the graph state.
 
-A sentence is accepted as well as a bare place. `hikes near Boulder this weekend` is read as Boulder plus the coming Saturday and Sunday. `Boulder, Colorado` is still just a place.
+A sentence is accepted as well as a bare place. `hikes near Boulder this weekend` is read as Boulder plus the coming Saturday and Sunday. `day hike near Boulder, CO this Saturday` is Boulder, CO, that Saturday, and a day hike. `Boulder, Colorado` is still just a place.
 
 ## Chat UI
 
@@ -110,6 +110,8 @@ Copy `.env.example`. Do not commit a filled-in `.env`.
 | `OPENAI_API_KEY` | Required. The planner calls the OpenAI API |
 | `MODEL_NAME` | Default `gpt-4.1-mini` |
 | `OPENAI_BASE_URL` | Optional base URL for an OpenAI-compatible server |
+| `OPENAI_TIMEOUT_SECONDS` | Timeout for each OpenAI request. Default 30 |
+| `OPENAI_MAX_RETRIES` | Extra attempts after the first OpenAI request. Default 2 |
 | `NPS_API_KEY` | Starts the local NPS MCP server and, if that fails, calls the NPS REST API |
 | `NPS_MCP_COMMAND`, `NPS_MCP_ARGS` | How the local NPS MCP process is started. Ignored when `NPS_API_KEY` is empty |
 | `NPS_MCP_URL` | Hosted parks MCP server, used after the local server |
@@ -160,7 +162,7 @@ Two services from this repo. Do not use `langgraph up`. That command builds the 
 
 The backend image also installs Node 22. The weather MCP server, and the local NPS MCP server when `NPS_API_KEY` is set, start with `npx`. If that process fails, the agents fall back to Open-Meteo, `api.weather.gov`, the NPS REST API, and OpenStreetMap.
 
-The planner uses OpenAI. `MODEL_NAME` defaults to `gpt-4.1-mini` in code and in the backend image. `OPENAI_API_KEY` is required on the Railway backend service and is not baked into the image. If the model call fails, the server logs a warning and the recommendation is the factual brief.
+The planner uses OpenAI. `MODEL_NAME` defaults to `gpt-4.1-mini` in code and in the backend image. `OPENAI_API_KEY` is required on the Railway backend service and is not baked into the image. Each request times out after `OPENAI_TIMEOUT_SECONDS` (default 30) and is retried `OPENAI_MAX_RETRIES` times (default 2). If it still fails, the user sees that error and the factual brief. A model draft that drops the forecast or names a park the tools did not return is corrected from the tool results.
 
 **Backend service**
 

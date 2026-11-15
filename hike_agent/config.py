@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+_INT_WARNED: set[str] = set()
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -11,6 +15,19 @@ def _flag(name: str, default: bool) -> bool:
     if raw is None or raw.strip() == "":
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        if name not in _INT_WARNED:
+            _INT_WARNED.add(name)
+            logger.warning("%s=%r is not an integer. Using %s.", name, raw, default)
+        return default
 
 
 def _float(name: str, default: float) -> float:
@@ -27,6 +44,8 @@ class Settings:
     model_name: str
     openai_api_key: str
     openai_base_url: str
+    openai_timeout: float
+    openai_max_retries: int
     nps_api_key: str
     nps_mcp_url: str
     nps_mcp_enabled: bool
@@ -59,6 +78,8 @@ def get_settings() -> Settings:
         model_name=os.environ.get("MODEL_NAME", "").strip() or "gpt-4.1-mini",
         openai_api_key=os.environ.get("OPENAI_API_KEY", "").strip(),
         openai_base_url=os.environ.get("OPENAI_BASE_URL", "").strip(),
+        openai_timeout=_float("OPENAI_TIMEOUT_SECONDS", 30),
+        openai_max_retries=_int("OPENAI_MAX_RETRIES", 2),
         nps_api_key=os.environ.get("NPS_API_KEY", "").strip(),
         nps_mcp_url=os.environ.get(
             "NPS_MCP_URL",

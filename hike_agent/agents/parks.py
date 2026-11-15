@@ -9,7 +9,6 @@ Order of sources:
 
 from __future__ import annotations
 
-import re
 from typing import Any, Callable
 
 import requests
@@ -23,6 +22,7 @@ from hike_agent.services.nps import (
     fetch_parks_bundle,
     hike_titles,
     park_record,
+    parks_from_find_text,
     rank_parks,
 )
 from hike_agent.services.osm import nearby_outdoor_places
@@ -31,10 +31,18 @@ AGENT_NAME = "parks"
 AGENT_BRIEF = "Find nearby national parks, hiking activities, and current park alerts."
 
 McpCall = Callable[[Any, str, dict[str, Any], float], dict[str, Any]]
-PARK_HEADING = re.compile(r"^###\s+(?P<name>.+)$", re.MULTILINE)
-PARK_CODE = re.compile(r"\*\*parkCode:\*\*\s+(?P<code>[A-Za-z0-9]{3,6})")
 NPS_SOURCES = frozenset({"nps-mcp-local", "nps-mcp", "nps-api"})
 NOT_VERIFIED = "not verified by NPS"
+_NOT_A_PARK_QUERY = {"provided location", "me", "here", "current", "current location", "near me", "my location"}
+
+
+def _park_query_name(name: Any) -> str:
+    """City or park text safe to send as an NPS query. Placeholders are not."""
+
+    text = str(name or "").strip()
+    if not text or text.lower() in _NOT_A_PARK_QUERY:
+        return ""
+    return text
 
 
 def _items(structured: Any, *keys: str) -> list[dict[str, Any]]:
@@ -58,20 +66,7 @@ def parks_from_mcp_result(result: dict[str, Any] | None) -> list[dict[str, Any]]
     items = _items(structured, "parks", "data")
     if items:
         return [park_record(item) for item in items]
-    text = result.get("text") or ""
-    parks: list[dict[str, Any]] = []
-    for match in PARK_HEADING.finditer(text):
-        window = text[match.end() : match.end() + 400]
-        code_match = PARK_CODE.search(window)
-        parks.append(
-            park_record(
-                {
-                    "fullName": match.group("name").strip(),
-                    "parkCode": code_match.group("code") if code_match else None,
-                }
-            )
-        )
-    return parks
+    return [park_record(park) for park in parks_from_find_text(result.get("text") or "")]
 
 
 def _apply_activity_payload(park: dict[str, Any], activities: dict[str, Any] | None, alerts: dict[str, Any] | None) -> None:
@@ -153,20 +148,32 @@ def find_hikes(
         return _report("none", "No coordinates, so park search was skipped.", [])
 
     notes: list[str] = []
+    search_name = _park_query_name(place.get("name"))
     arguments: dict[str, Any] = {"limit": 8}
     if place.get("state_code"):
         arguments["stateCode"] = place["state_code"]
-    if place.get("name"):
-        arguments["query"] = place["name"]
-    for source_name, target in _mcp_attempts(settings):
+    if search_name:
+        arguments["query"] = search_name
+    # A coordinate-only place has no city. Querying NPS for a placeholder such as
+    # "Provided location", or with no query at all, returns parks for the wrong place.
+    if not search_name and not place.get("state_code"):
+        notes.append("No place name or state, so the park-name search was skipped.")
+        attempts: list[tuple[str, Any]] = []
+    else:
+        attempts = _mcp_attempts(settings)
+    for source_name, target in attempts:
         found = mcp_call(target, "nps_find_parks", arguments, settings.nps_mcp_timeout)
-        parks = rank_parks(parks_from_mcp_result(found), latitude, longitude, limit=4)
+        raw = parks_from_mcp_result(found)
+        parks = rank_parks(raw, latitude, longitude, limit=4)
         if parks:
             _attach_mcp_details(parks, mcp_call, target, settings.nps_mcp_timeout)
             return _report(source_name, "", parks)
-        error = str((found or {}).get("error") or "no parks returned")
         label = "Local NPS MCP" if source_name == "nps-mcp-local" else "Hosted NPS MCP"
-        notes.append(f"{label} unavailable ({error[:180]}).")
+        if raw:
+            notes.append(f"{label} returned parks, but none with coordinates were found within 160 km.")
+        else:
+            error = str((found or {}).get("error") or "no parks returned")
+            notes.append(f"{label} unavailable ({error[:180]}).")
 
     if settings.nps_api_key:
         try:

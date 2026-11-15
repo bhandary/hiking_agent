@@ -150,15 +150,12 @@ def test_weather_fake_without_a_date_argument_still_runs():
     assert state["conditions"]["source"] == "open-meteo+nws"
 
 
-def test_graph_skips_remote_agents_when_location_fails():
-    seen = {}
-
+def test_graph_stops_when_the_place_cannot_be_resolved():
     def fail(_place):
         raise AssertionError("parks and weather should not run without coordinates")
 
-    def complete(brief: str) -> str:
-        seen["brief"] = brief
-        return "No hike planned."
+    def complete(_brief: str) -> str:
+        raise AssertionError("the planner should not run when the place was not found")
 
     graph = build_graph(
         lambda _query: {"latitude": None, "longitude": None, "label": "unknown", "source": "none", "note": "No coordinates found."},
@@ -167,6 +164,70 @@ def test_graph_skips_remote_agents_when_location_fails():
         complete,
     )
     state = graph.invoke({"query": "not a place", "errors": [], "trace": []})
-    assert "No parks or trails were found." in seen["brief"]
-    assert state["recommendation"].startswith("No hike planned.")
-    assert state["trace"] == ["location: unknown via none", "planner: model"]
+    assert state["recommendation"] == "I couldn't find that place, try a city/park name."
+    assert state["planner"] == "stopped"
+    assert state["trace"] == ["location: stopped via none"]
+
+
+def test_near_me_without_coordinates_asks_instead_of_planning():
+    def fail(_place):
+        raise AssertionError("parks and weather should not run")
+
+    graph = build_graph(
+        lambda _query: {"latitude": None, "longitude": None, "label": "me", "source": "needs-location", "note": "need a place"},
+        fail,
+        fail,
+        lambda _brief: "should not be called",
+    )
+    state = graph.invoke({"query": "me", "errors": [], "trace": []})
+    assert "city or park name" in state["recommendation"]
+    assert state["planner"] == "stopped"
+
+
+def test_forecast_is_kept_when_the_model_omits_it():
+    def complete(_brief: str) -> str:
+        return "Hike Bear Lake Trail in Rocky Mountain National Park."
+
+    graph = build_graph(lambda _query: PLACE, lambda _place: PARKS, lambda _place: CONDITIONS, complete)
+    state = graph.invoke({"query": "Boulder", "errors": [], "trace": []})
+    assert "Partly cloudy" in state["recommendation"]
+    assert "Bear Lake Trail" in state["recommendation"]
+    assert state["planner"] == "model"
+
+
+def test_invented_parks_are_replaced_with_tool_results():
+    calls = {"n": 0}
+
+    def complete(_brief: str) -> str:
+        calls["n"] += 1
+        return "Sunrise is best from Imaginary Peak Trail."
+
+    graph = build_graph(lambda _query: PLACE, lambda _place: PARKS, lambda _place: CONDITIONS, complete)
+    state = graph.invoke({"query": "Boulder", "errors": [], "trace": []})
+    assert calls["n"] == 2
+    assert "Imaginary Peak Trail" not in state["recommendation"]
+    assert "Bear Lake Trail" in state["recommendation"]
+    assert "Rocky Mountain National Park" in state["recommendation"]
+    assert "Partly cloudy" in state["recommendation"]
+    assert state["planner"] == "grounded"
+
+
+def test_geocoding_failure_is_not_reported_as_an_unknown_place():
+    def fail(_place):
+        raise AssertionError("parks and weather should not run when geocoding failed")
+
+    graph = build_graph(
+        lambda _query: {
+            "latitude": None,
+            "longitude": None,
+            "label": "Boulder",
+            "source": "error",
+            "note": "Geocoding failed (TimeoutError).",
+        },
+        fail,
+        fail,
+        lambda _brief: "should not be called",
+    )
+    state = graph.invoke({"query": "Boulder", "errors": [], "trace": []})
+    assert state["recommendation"] == "Geocoding failed (TimeoutError)."
+    assert state["planner"] == "stopped"

@@ -17,6 +17,8 @@ def settings() -> Settings:
         model_name="gpt-4.1-mini",
         openai_api_key="",
         openai_base_url="",
+        openai_timeout=30,
+        openai_max_retries=2,
         nps_api_key="",
         nps_mcp_url="https://nps.example.test/mcp",
         nps_mcp_enabled=True,

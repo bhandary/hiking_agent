@@ -56,7 +56,12 @@ def _codes(hourly: dict[str, Any]) -> list[Any]:
     return hourly.get("weathercode") or []
 
 
-def summarize_daylight(weather_data: dict[str, Any], today: date | None = None) -> dict[str, Any]:
+def summarize_daylight(
+    weather_data: dict[str, Any],
+    today: date | None = None,
+    *,
+    user_today: date | None = None,
+) -> dict[str, Any]:
     """Turn an Open-Meteo hourly forecast into one daylight summary.
 
     Returns a dict with ``summary`` text and the numbers the risk check uses.
@@ -78,7 +83,8 @@ def summarize_daylight(weather_data: dict[str, Any], today: date | None = None) 
     temperatures = hourly["temperature_2m"]
     precip_probs = hourly["precipitation_probability"]
     weather_codes = _codes(hourly)
-    today = today or date.today()
+    calendar_today = user_today if user_today is not None else date.today()
+    today = today or calendar_today
 
     daylight_temps: list[float] = []
     daylight_precip: list[float] = []
@@ -104,6 +110,8 @@ def summarize_daylight(weather_data: dict[str, Any], today: date | None = None) 
         daylight_codes.append(int(code))
 
     if not daylight_temps:
+        if today != calendar_today:
+            return {"ok": False, "summary": f"No daylight forecast was available for {today.isoformat()}."}
         return {"ok": False, "summary": "Could not get a weather summary for today's daylight hours."}
     try:
         average_temp = round(statistics.mean(daylight_temps))
@@ -118,8 +126,12 @@ def summarize_daylight(weather_data: dict[str, Any], today: date | None = None) 
     else:
         max_precip = None
         precip_text = "no precipitation probability in the forecast"
+    if today == calendar_today:
+        prefix = "Today's forecast"
+    else:
+        prefix = f"Forecast for {today.isoformat()}"
     summary = (
-        f"Today's forecast: {description}, with an average temperature of "
+        f"{prefix}: {description}, with an average temperature of "
         f"{average_temp}°C and {precip_text}."
     )
     return {
@@ -204,6 +216,7 @@ def fetch_open_meteo_and_alerts(
     timeout: float,
     user_agent: str,
     today: date | None = None,
+    user_today: date | None = None,
     forecast_days: int = 2,
 ) -> dict[str, Any]:
     """Direct-API weather report used when the weather MCP server is down."""
@@ -220,7 +233,7 @@ def fetch_open_meteo_and_alerts(
         timeout=timeout,
         user_agent=user_agent,
     )
-    summary = summarize_daylight(forecast, today=today)
+    summary = summarize_daylight(forecast, today=today, user_today=user_today)
     alert_error = None
     alerts: list[dict[str, str]] = []
     try:
