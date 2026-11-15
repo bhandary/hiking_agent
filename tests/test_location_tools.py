@@ -73,7 +73,16 @@ def test_near_me_punctuation_and_hike_wording_do_not_geocode(settings):
     def get_json(*_args, **_kwargs):
         raise AssertionError("near me must not geocode")
 
-    for query in ("me!", "near me!", "hike near me", "day hike near me"):
+    for query in (
+        "me!",
+        "near me!",
+        "hike near me",
+        "day hike near me",
+        "nearby",
+        "around me",
+        "close to me",
+        "hike nearby",
+    ):
         place = resolve_place(query, settings=settings, get_json=get_json)
         assert place["source"] == "needs-location", query
 

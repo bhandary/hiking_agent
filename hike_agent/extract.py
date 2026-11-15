@@ -13,6 +13,7 @@ import calendar
 import re
 from datetime import date, timedelta
 
+from hike_agent.clock import DEFAULT_TIMEZONE, today_in
 from hike_agent.coordinates import parse_coordinates, strip_coordinates
 
 INVALID_DATE = "That date isn't a real day. Try a date that exists."
@@ -126,10 +127,16 @@ def is_activity_phrase(text: str) -> bool:
     return bool(words) and all(word in NOT_A_PLACE for word in words)
 
 
-def extract_hike_request(text: str, *, today: date | None = None) -> dict:
-    """Return ``place``, ``when``, and any client ``coordinates`` in the text."""
+def extract_hike_request(text: str, *, today: date | None = None, timezone: str | None = None) -> dict:
+    """Return ``place``, ``when``, and any client ``coordinates`` in the text.
 
-    today = today or date.today()
+    ``today`` is injected by tests. Otherwise the day is taken in ``timezone``,
+    or America/Los_Angeles when the request does not name one.
+    """
+
+    tz_name = (timezone or "").strip() or DEFAULT_TIMEZONE
+    if today is None:
+        today = today_in(tz_name)
     raw = " ".join((text or "").split())
     when = _when(raw, today)
     length = _trip_length(raw)
@@ -140,6 +147,7 @@ def extract_hike_request(text: str, *, today: date | None = None) -> dict:
         "place": _place(raw),
         "when": when,
         "coordinates": {"latitude": coords[0], "longitude": coords[1]} if coords else None,
+        "timezone": tz_name,
     }
 
 

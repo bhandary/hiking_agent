@@ -45,10 +45,15 @@ def build_chat_graph(plan=None):
 
     def plan_node(state: ChatState) -> dict[str, Any]:
         text = latest_human_text(state.get("messages"))
-        extracted = extract_hike_request(text)
-        place = extracted["place"] or text
+        extracted = extract_hike_request(text, timezone=state.get("timezone"))
+        place = extracted["place"]
         coordinates = state.get("coordinates") or extracted.get("coordinates")
-        result = planner(place, when=extracted.get("when") or {}, coordinates=coordinates)
+        result = planner(
+            place,
+            when=extracted.get("when") or {},
+            coordinates=coordinates,
+            timezone=state.get("timezone") or extracted.get("timezone"),
+        )
         answer = (result or {}).get("recommendation") or "No recommendation was produced."
         return {"messages": [AIMessage(content=answer)]}
 

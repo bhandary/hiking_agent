@@ -21,6 +21,7 @@ def plan_hike(
     settings=None,
     when=None,
     coordinates=None,
+    timezone=None,
 ) -> dict[str, Any]:
     """Run the graph for one place query and return the final state."""
 
@@ -52,6 +53,8 @@ def plan_hike(
             complete = None
     graph = build_graph(complete=complete)
     payload: dict[str, Any] = {"query": query, "when": when or {}, "errors": [], "trace": []}
+    if timezone:
+        payload["timezone"] = timezone
     if coordinates:
         payload["coordinates"] = coordinates
     return graph.invoke(payload)
@@ -118,6 +121,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lon", type=float, default=None, help="Longitude supplied by the client.")
     parser.add_argument("--json", action="store_true", help="Print the graph state as JSON.")
     parser.add_argument("--chat", action="store_true", help="Ask follow-up questions after the recommendation.")
+    parser.add_argument(
+        "--tz",
+        default=None,
+        help="IANA timezone for today and relative dates. Default America/Los_Angeles.",
+    )
     args = parser.parse_args(argv)
     if not args.place:
         parser.print_help(sys.stderr)
@@ -133,7 +141,7 @@ def main(argv: list[str] | None = None) -> int:
     if (args.lat is None) != (args.lon is None):
         print("Provide both --lat and --lon.", file=sys.stderr)
         return 2
-    extracted = extract_hike_request(args.place)
+    extracted = extract_hike_request(args.place, timezone=args.tz)
     coordinates = extracted.get("coordinates")
     if args.lat is not None and args.lon is not None:
         coordinates = {"latitude": args.lat, "longitude": args.lon}
@@ -144,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
             settings=settings,
             when=extracted.get("when") or {},
             coordinates=coordinates,
+            timezone=extracted.get("timezone"),
         )
     except Exception as exc:  # noqa: BLE001
         print(f"Hike planner failed: {exc}", file=sys.stderr)

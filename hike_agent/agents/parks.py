@@ -178,13 +178,17 @@ def find_hikes(
         attempts = _mcp_attempts(settings)
     for source_name, target in attempts:
         found = mcp_call(target, "nps_find_parks", arguments, settings.nps_mcp_timeout)
-        parks = rank_parks(parks_from_mcp_result(found), latitude, longitude, limit=4)
+        raw = parks_from_mcp_result(found)
+        parks = rank_parks(raw, latitude, longitude, limit=4)
         if parks:
             _attach_mcp_details(parks, mcp_call, target, settings.nps_mcp_timeout)
             return _report(source_name, "", parks)
-        error = str((found or {}).get("error") or "no parks returned")
         label = "Local NPS MCP" if source_name == "nps-mcp-local" else "Hosted NPS MCP"
-        notes.append(f"{label} unavailable ({error[:180]}).")
+        if raw:
+            notes.append(f"{label} returned parks, but none with coordinates were found within 160 km.")
+        else:
+            error = str((found or {}).get("error") or "no parks returned")
+            notes.append(f"{label} unavailable ({error[:180]}).")
 
     if settings.nps_api_key:
         try:

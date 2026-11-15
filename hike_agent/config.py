@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+_INT_WARNED: set[str] = set()
 
 
 def _flag(name: str, default: bool) -> bool:
@@ -17,7 +21,13 @@ def _int(name: str, default: int) -> int:
     raw = os.environ.get(name)
     if raw is None or raw.strip() == "":
         return default
-    return int(raw)
+    try:
+        return int(raw)
+    except ValueError:
+        if name not in _INT_WARNED:
+            _INT_WARNED.add(name)
+            logger.warning("%s=%r is not an integer. Using %s.", name, raw, default)
+        return default
 
 
 def _float(name: str, default: float) -> float:

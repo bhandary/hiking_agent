@@ -7,7 +7,7 @@ forecast plus the National Weather Service alerts endpoint.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Callable
 
 from langchain_core.tools import tool
@@ -21,17 +21,78 @@ AGENT_NAME = "weather"
 AGENT_BRIEF = "Summarize daylight hiking conditions and active weather alerts."
 
 
-def _forecast_horizon(today: date | None) -> int:
-    """How many forecast days to request so ``today`` is inside the window."""
+def _forecast_horizon(today: date | None, *, anchor: date | None = None) -> int | None:
+    """How many forecast days to request so ``today`` is inside the window.
+
+    Returns ``None`` when ``today`` is 16 or more days after ``anchor``. The
+    forecast APIs do not cover that day, so the caller says so instead of
+    requesting a window that ends earlier.
+    """
 
     if today is None:
         return 2
-    delta = (today - date.today()).days
+    base = anchor if anchor is not None else date.today()
+    delta = (today - base).days
+    if delta < 0:
+        return 2
+    if delta >= 16:
+        return None
     if delta <= 1:
         return 2
     # Open-Meteo and the weather MCP accept 16 days. "next Monday" can be 13
     # days out; a cap of 7 asked for a window that did not contain that day.
     return min(delta + 1, 16)
+
+
+def _outside_forecast(target: date, anchor: date) -> dict[str, Any]:
+    end = anchor + timedelta(days=15)
+    return {
+        "source": "none",
+        "summary": (
+            f"No forecast is available for {target.isoformat()}. "
+            f"Forecasts cover 16 days from {anchor.isoformat()} through {end.isoformat()}. "
+            f"{target.isoformat()} is outside that window, so this is not a weather forecast."
+        ),
+        "suitable": False,
+        "risk": "unknown",
+        "safety_notes": ["No weather was looked up for this date."],
+        "alerts": [],
+    }
+
+
+def _clip_forecast(text: str, day: date | None, limit: int = 2500) -> str:
+    """Keep the requested day's section, then clip the rest.
+
+    A blind cut at 2500 characters can drop the day the hiker asked about
+    when it sits later in a multi-day report.
+    """
+
+    if len(text) <= limit:
+        return text
+    start = _day_section_start(text, day)
+    excerpt = text[start:]
+    if len(excerpt) <= limit:
+        return excerpt
+    return excerpt[: limit - 1].rstrip() + "…"
+
+
+def _day_section_start(text: str, day: date | None) -> int:
+    if day is None:
+        return 0
+    lowered = text.lower()
+    markers = [
+        day.isoformat(),
+        f"{day.strftime('%B')} {day.day}".lower(),
+        f"{day.strftime('%b')} {day.day}".lower(),
+        day.strftime("%A").lower(),
+    ]
+    for marker in markers:
+        idx = lowered.rfind(marker)
+        if idx == -1:
+            continue
+        line = text.rfind("\n", 0, idx)
+        return 0 if line < 0 else line + 1
+    return 0
 
 McpCall = Callable[[Any, str, dict[str, Any], float], dict[str, Any]]
 
@@ -86,22 +147,26 @@ def _alert_note(alert_text: str, alert_ok: bool) -> str:
     return clipped
 
 
-def conditions_from_mcp(forecast: dict[str, Any], alerts: dict[str, Any] | None) -> dict[str, Any] | None:
+def conditions_from_mcp(
+    forecast: dict[str, Any],
+    alerts: dict[str, Any] | None,
+    *,
+    day: date | None = None,
+) -> dict[str, Any] | None:
     """Build a conditions report from weather-MCP tool payloads."""
 
     if not forecast or not forecast.get("ok") or not (forecast.get("text") or "").strip():
         return None
-    summary = (forecast.get("text") or "").strip()
-    if len(summary) > 2500:
-        summary = summary[:2499].rstrip() + "…"
+    full = (forecast.get("text") or "").strip()
+    summary = _clip_forecast(full, day)
     alert_text = ((alerts or {}).get("text") or "").strip()
     alert_ok = bool(alerts and alerts.get("ok"))
     risk = _worse(
-        _risk_from_forecast_text(summary),
+        _risk_from_forecast_text(full),
         _risk_from_alert_text(alert_text) if alert_ok else "caution",
     )
     notes = [_alert_note(alert_text, alert_ok)]
-    if _risk_from_forecast_text(summary) != "ok":
+    if _risk_from_forecast_text(full) != "ok":
         notes.append("The forecast mentions unsettled weather (fog, precipitation, storms, or ice).")
     return {
         "source": "weather-mcp",
@@ -120,6 +185,7 @@ def hiking_conditions(
     mcp_call: McpCall | None = None,
     get_json: Callable[..., Any] | None = None,
     today: date | None = None,
+    anchor: date | None = None,
 ) -> dict[str, Any]:
     """Return a conditions report for a resolved place."""
 
@@ -137,12 +203,17 @@ def hiking_conditions(
             "alerts": [],
         }
 
+    horizon = _forecast_horizon(today, anchor=anchor)
+    if today is not None and horizon is None:
+        return _outside_forecast(today, anchor if anchor is not None else date.today())
+    days = horizon if horizon is not None else 2
+
     if settings.weather_mcp_enabled:
         target = weather_mcp_target(settings)
         forecast_arguments = {
             "latitude": latitude,
             "longitude": longitude,
-            "days": _forecast_horizon(today),
+            "days": days,
             "granularity": "daily",
             "include_precipitation_probability": True,
             "source": "auto",
@@ -157,7 +228,7 @@ def hiking_conditions(
         else:
             forecast = mcp_call(target, "get_forecast", forecast_arguments, settings.weather_mcp_timeout)
             alerts = mcp_call(target, "get_alerts", alert_arguments, settings.weather_mcp_timeout)
-        report = conditions_from_mcp(forecast, alerts)
+        report = conditions_from_mcp(forecast, alerts, day=today)
         if report:
             return report
 
@@ -169,7 +240,8 @@ def hiking_conditions(
             timeout=settings.http_timeout,
             user_agent=settings.user_agent,
             today=today,
-            forecast_days=_forecast_horizon(today),
+            user_today=anchor,
+            forecast_days=days,
         )
     except Exception as exc:  # noqa: BLE001
         return {

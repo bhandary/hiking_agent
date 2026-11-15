@@ -190,3 +190,38 @@ def test_missing_coordinates_do_not_call_out():
     report = hiking_conditions({"latitude": None, "longitude": None}, mcp_call=mcp_down)
     assert report["source"] == "none"
     assert report["suitable"] is False
+
+
+def test_today_label_follows_the_hikers_day_not_a_different_clock():
+    hikers_today = date(2026, 11, 15)
+    later = date(2026, 11, 21)
+    future = summarize_daylight(_hourly(day=later), today=later, user_today=hikers_today)
+    assert future["summary"].startswith("Forecast for 2026-11-21")
+    current = summarize_daylight(_hourly(day=hikers_today), today=hikers_today, user_today=hikers_today)
+    assert current["summary"].startswith("Today's forecast")
+
+
+def test_a_day_outside_the_16_day_window_is_not_fetched(settings):
+    target = date.today() + timedelta(days=20)
+
+    def fail(*_args, **_kwargs):
+        raise AssertionError("a date outside the forecast window must not be fetched")
+
+    report = hiking_conditions(PLACE, settings=settings, mcp_call=fail, get_json=fail, today=target)
+    assert "outside that window" in report["summary"]
+    assert "not a weather forecast" in report["summary"]
+    assert report["source"] == "none"
+
+
+def test_clipping_keeps_the_requested_day():
+    day = date(2026, 11, 21)
+    text = ("Earlier day: cloudy.\n" * 200) + f"\n{day.isoformat()}: sunny, high 12 C.\n"
+    assert len(text) > 2500
+    report = conditions_from_mcp(
+        {"ok": True, "text": text},
+        {"ok": True, "text": "No active alerts."},
+        day=day,
+    )
+    assert report is not None
+    assert day.isoformat() in report["summary"]
+    assert len(report["summary"]) <= 2500

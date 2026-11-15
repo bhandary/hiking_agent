@@ -23,13 +23,24 @@ from hike_agent.agents.location import (
 from hike_agent.agents.parks import find_hikes as default_find_hikes
 from hike_agent.agents.planner import ground_recommendation, render_brief, safety_footer
 from hike_agent.agents.weather import hiking_conditions as default_hiking_conditions
+from hike_agent.clock import today_in
 from hike_agent.model import warn_model_failure
 from hike_agent.state import HikeState
 
 Complete = Callable[[str], str]
 
 
-def _forecast_day(when: Any) -> date | None:
+def _user_today(state: HikeState) -> date:
+    """Today in the timezone the request named, otherwise America/Los_Angeles."""
+
+    when = state.get("when") or {}
+    timezone = state.get("timezone")
+    if isinstance(when, dict) and when.get("timezone"):
+        timezone = when["timezone"]
+    return today_in(timezone)
+
+
+def _forecast_day(when: Any, anchor: date) -> date | None:
     """Date the weather agent should summarize, when the request named one."""
 
     if not isinstance(when, dict):
@@ -41,8 +52,8 @@ def _forecast_day(when: Any) -> date | None:
         day = date.fromisoformat(str(start))
     except ValueError:
         return None
-    if day < date.today():
-        return date.today()
+    if day < anchor:
+        return anchor
     return day
 
 
@@ -94,12 +105,13 @@ def build_graph(
 
     def weather_node(state: HikeState) -> dict[str, Any]:
         place = state.get("place") or {}
-        day = _forecast_day(state.get("when"))
-        if day is None:
-            report = hiking_conditions(place)
-        else:
+        anchor = _user_today(state)
+        day = _forecast_day(state.get("when"), anchor)
+        try:
+            report = hiking_conditions(place, today=day, anchor=anchor)
+        except TypeError:
             try:
-                report = hiking_conditions(place, today=day)
+                report = hiking_conditions(place, today=day) if day is not None else hiking_conditions(place)
             except TypeError:
                 report = hiking_conditions(place)
         return {

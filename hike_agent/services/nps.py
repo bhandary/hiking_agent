@@ -98,20 +98,47 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
-def rank_parks(parks: list[dict[str, Any]], latitude: float | None, longitude: float | None, limit: int = 4) -> list[dict[str, Any]]:
-    """Closest national parks first, then other NPS sites, capped for the planner."""
+# A day-hike search should not surface a park hundreds of kilometres away
+# just because nearer rows were missing coordinates.
+NEARBY_RADIUS_KM = 160.0
+
+
+def rank_parks(
+    parks: list[dict[str, Any]],
+    latitude: float | None,
+    longitude: float | None,
+    limit: int = 4,
+    radius_km: float | None = NEARBY_RADIUS_KM,
+) -> list[dict[str, Any]]:
+    """Closest parks that have coordinates, capped for the planner.
+
+    Rows without a latitude and longitude are left out. They used to be given
+    a dummy distance, which let far parks and coordinate-less parks fill the
+    list. When the hiker's point is known, parks outside ``radius_km`` are
+    left out too.
+    """
+
+    located = [
+        park
+        for park in parks
+        if park.get("latitude") is not None and park.get("longitude") is not None
+    ]
+    if latitude is not None and longitude is not None and radius_km is not None:
+        located = [
+            park
+            for park in located
+            if haversine_km(latitude, longitude, float(park["latitude"]), float(park["longitude"])) <= radius_km
+        ]
 
     def sort_key(park: dict[str, Any]) -> tuple[float, int, str]:
-        park_lat = park.get("latitude")
-        park_lon = park.get("longitude")
-        if latitude is None or longitude is None or park_lat is None or park_lon is None:
-            distance = 1_000_000.0
+        if latitude is None or longitude is None:
+            distance = 0.0
         else:
-            distance = haversine_km(latitude, longitude, park_lat, park_lon)
+            distance = haversine_km(latitude, longitude, float(park["latitude"]), float(park["longitude"]))
         national = 0 if "national park" in (park.get("designation") or "").lower() else 1
         return (distance, national, park.get("name") or "")
 
-    return sorted(parks, key=sort_key)[:limit]
+    return sorted(located, key=sort_key)[:limit]
 
 
 def fetch_parks_bundle(

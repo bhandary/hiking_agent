@@ -16,6 +16,7 @@ class HikeState(TypedDict, total=False):
     query: str
     when: dict[str, Any]
     coordinates: dict[str, Any]
+    timezone: str
     place: dict[str, Any] | None
     parks: dict[str, Any] | None
     conditions: dict[str, Any] | None

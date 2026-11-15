@@ -5,6 +5,7 @@ from __future__ import annotations
 import requests
 
 from hike_agent.agents.parks import find_hikes, parks_from_mcp_result
+from hike_agent.services.nps import rank_parks
 from hike_agent.config import Settings
 from tests.helpers import mcp_down
 
@@ -330,3 +331,61 @@ def test_coordinates_without_a_place_name_skip_the_park_name_search(settings):
         )
         assert "park-name search was skipped" in report["note"]
         assert report["parks"] == []
+
+
+def test_parks_without_coordinates_are_not_ranked_near_boulder():
+    boulder = (40.015, -105.271)
+    parks = [
+        {
+            "name": "Rocky Mountain National Park",
+            "designation": "National Park",
+            "latitude": 40.34,
+            "longitude": -105.68,
+        },
+        {
+            "name": "Colorado National Monument",
+            "designation": "National Monument",
+            "latitude": 39.07,
+            "longitude": -108.69,
+        },
+        {
+            "name": "Hovenweep National Monument",
+            "designation": "National Monument",
+            "latitude": None,
+            "longitude": None,
+        },
+    ]
+    ranked = rank_parks(parks, *boulder, limit=4)
+    assert [park["name"] for park in ranked] == ["Rocky Mountain National Park"]
+
+
+def test_only_coordinate_less_parks_are_reported_as_none_nearby(settings):
+    def mcp_call(_target, tool, _arguments, _timeout):
+        if tool != "nps_find_parks":
+            return {"ok": True, "structured": {}, "error": None}
+        return {
+            "ok": True,
+            "error": None,
+            "structured": {
+                "parks": [
+                    {"fullName": "Hovenweep National Monument", "parkCode": "hove", "designation": "National Monument"},
+                    {
+                        "fullName": "Colorado National Monument",
+                        "parkCode": "colm",
+                        "designation": "National Monument",
+                        "latitude": "39.07",
+                        "longitude": "-108.69",
+                    },
+                ]
+            },
+        }
+
+    report = find_hikes(
+        PLACE,
+        settings=settings,
+        mcp_call=mcp_call,
+        get_json=lambda *_a, **_k: [],
+        overpass=lambda *_a, **_k: [],
+    )
+    assert report["parks"] == []
+    assert "within 160 km" in report["note"]
