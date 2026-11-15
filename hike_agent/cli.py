@@ -7,8 +7,9 @@ import json
 import sys
 from typing import Any
 
+from hike_agent.agents.planner import ground_recommendation, render_brief
 from hike_agent.config import get_settings
-from hike_agent.extract import extract_hike_request
+from hike_agent.extract import INVALID_DATE, extract_hike_request
 from hike_agent.graph import build_graph
 from hike_agent.model import make_complete, warn_model_failure
 
@@ -23,6 +24,25 @@ def plan_hike(
 ) -> dict[str, Any]:
     """Run the graph for one place query and return the final state."""
 
+    if isinstance(when, dict) and when.get("invalid"):
+        return {
+            "query": query,
+            "when": when,
+            "coordinates": coordinates,
+            "place": {
+                "query": query,
+                "name": None,
+                "label": query,
+                "latitude": None,
+                "longitude": None,
+                "source": "none",
+                "note": INVALID_DATE,
+            },
+            "recommendation": INVALID_DATE,
+            "planner": "stopped",
+            "errors": [],
+            "trace": ["extract: invalid date"],
+        }
     settings = settings or get_settings()
     if complete is None:
         try:
@@ -49,6 +69,21 @@ def format_sources(state: dict[str, Any]) -> str:
     )
 
 
+def answer_follow_up(state: dict[str, Any], question: str, complete) -> str:
+    """Answer one follow-up, then keep the reply on the tool results."""
+
+    prompt = (
+        f"{render_brief(state)}\n\n"
+        f"Prior recommendation:\n{state.get('recommendation') or ''}\n\n"
+        f"Follow-up question:\n{question}\n\n"
+        "Answer from the brief only. Do not invent parks, trails, temperatures, distances, dates, or alerts. "
+        "A missing alert is not an all-clear. Include the forecast summary word for word."
+    )
+    answer = complete(prompt).strip()
+    text, _how = ground_recommendation(answer, state, complete)
+    return text
+
+
 def _follow_up(state: dict[str, Any], complete) -> None:
     if complete is None:
         print("Follow-up questions need a reachable model. The recommendation above is the full answer.", file=sys.stderr)
@@ -61,9 +96,8 @@ def _follow_up(state: dict[str, Any], complete) -> None:
             return
         if question.strip().lower() in {"exit", "quit", ""}:
             return
-        prompt = f"Prior recommendation:\n{history}\n\nFollow-up question:\n{question}"
         try:
-            answer = complete(prompt)
+            answer = answer_follow_up({**state, "recommendation": history}, question, complete)
         except Exception as exc:  # noqa: BLE001
             print(f"Model unavailable: {exc}", file=sys.stderr)
             return

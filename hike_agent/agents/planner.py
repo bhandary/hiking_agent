@@ -7,6 +7,7 @@ unreachable, the brief itself is the recommendation, so safety notes still appea
 from __future__ import annotations
 
 import re
+from datetime import date, timedelta
 from typing import Any, Callable
 
 from hike_agent.agents.parks import NOT_VERIFIED, NPS_SOURCES
@@ -24,9 +25,130 @@ Rules:
 - Include the forecast summary from the brief word for word.
 """
 
-_PLACE_NAME = re.compile(
-    r"\b([A-Z][\w'’.-]*(?:\s+[A-Z][\w'’.-]*){0,6}\s+(?:Trail|Park|Path|Loop|Canyon|Peak|Lake|Ridge|Wilderness|Monument|Creek|Mountain))\b"
+_PLACE_SUFFIXES = (
+    "national park",
+    "state park",
+    "national forest",
+    "national monument",
+    "wilderness area",
+    "waterfall",
+    "wilderness",
+    "monument",
+    "mountain",
+    "mountains",
+    "canyon",
+    "summit",
+    "meadow",
+    "overlook",
+    "glacier",
+    "valley",
+    "basin",
+    "ridge",
+    "creek",
+    "falls",
+    "trail",
+    "trails",
+    "route",
+    "forest",
+    "butte",
+    "gulch",
+    "point",
+    "mesa",
+    "peak",
+    "lake",
+    "pond",
+    "loop",
+    "path",
+    "pass",
+    "river",
 )
+_PLACE_SUFFIX = re.compile(
+    r"\b(?:" + "|".join(re.escape(suffix) for suffix in _PLACE_SUFFIXES) + r")\b",
+    re.IGNORECASE,
+)
+_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "are",
+        "around",
+        "at",
+        "be",
+        "best",
+        "but",
+        "cold",
+        "dawn",
+        "day",
+        "for",
+        "from",
+        "go",
+        "hike",
+        "hikes",
+        "hiking",
+        "hot",
+        "in",
+        "is",
+        "it",
+        "near",
+        "of",
+        "on",
+        "or",
+        "see",
+        "sunrise",
+        "sunset",
+        "that",
+        "the",
+        "this",
+        "to",
+        "today",
+        "tomorrow",
+        "try",
+        "via",
+        "visit",
+        "was",
+        "will",
+        "with",
+    }
+)
+_TEMPERATURE = re.compile(r"(-?\d+(?:\.\d+)?)\s*°?\s*([FC])\b", re.IGNORECASE)
+_MEASURE = re.compile(
+    r"\b(\d+(?:,\d{3})*(?:\.\d+)?)\s*(miles?|mi|kilometers?|km|feet|foot|ft|meters?|m)\b",
+    re.IGNORECASE,
+)
+_MONTH_DAY = re.compile(
+    r"\b(?P<month>january|february|march|april|may|june|july|august|september|october|november|december|"
+    r"jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\s+(?P<day>\d{1,2})(?:st|nd|rd|th)?(?:,?\s+(?P<year>\d{4}))?\b",
+    re.IGNORECASE,
+)
+_DAY_MONTH = re.compile(
+    r"\b(?P<day>\d{1,2})(?:st|nd|rd|th)?\s+(?P<month>january|february|march|april|may|june|july|august|"
+    r"september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)"
+    r"(?:,?\s+(?P<year>\d{4}))?\b",
+    re.IGNORECASE,
+)
+_ISO_DATE = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+_WEEKDAY = re.compile(r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b", re.IGNORECASE)
+_ALL_CLEAR = re.compile(
+    r"\b(?:no alerts?(?:\s+are\s+in\s+effect)?|all[- ]clear|it is safe|safe to hike|no closures|no hazards)\b",
+    re.IGNORECASE,
+)
+_MONTH_INDEX = {
+    "january": 1, "jan": 1, "february": 2, "feb": 2, "march": 3, "mar": 3,
+    "april": 4, "apr": 4, "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9, "sept": 9, "october": 10, "oct": 10,
+    "november": 11, "nov": 11, "december": 12, "dec": 12,
+}
+_WEEKDAY_INDEX = {
+    "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+    "friday": 4, "saturday": 5, "sunday": 6,
+}
+_UNIT_FAMILY = {
+    "mile": "mi", "miles": "mi", "mi": "mi",
+    "kilometer": "km", "kilometers": "km", "km": "km",
+    "foot": "ft", "feet": "ft", "ft": "ft",
+    "meter": "m", "meters": "m", "m": "m",
+}
 
 
 def _nps_verified(park: dict[str, Any], report: dict[str, Any]) -> bool:
@@ -118,19 +240,34 @@ def allowed_place_names(state: dict[str, Any]) -> list[str]:
         if park.get("name"):
             names.append(str(park["name"]))
         names.extend(str(trail) for trail in (park.get("trails") or []) if trail)
+    for candidate in _place_candidates(_tool_fact_text(state)):
+        if candidate not in names:
+            names.append(candidate)
     return names
 
 
 def invented_place_names(text: str, state: dict[str, Any]) -> list[str]:
-    """Park or trail names in ``text`` that no tool returned."""
+    """Park or trail names in ``text`` that no tool returned.
+
+    Matching is case-insensitive and is not limited to Title Case. A name is
+    allowed only when it is a tool name, not when one string merely contains
+    the other. ``Lake Trail`` is not ``Bear Lake Trail``.
+    """
 
     allowed = allowed_place_names(state)
     invented: list[str] = []
-    for match in _PLACE_NAME.finditer(text or ""):
-        name = match.group(1).strip()
+    for name in _place_candidates(text or ""):
         if name not in invented and not _name_allowed(name, allowed):
             invented.append(name)
     return invented
+
+
+def ungrounded_claims(text: str, state: dict[str, Any]) -> list[str]:
+    """Place names, weather, dates, distances, and all-clears the tools do not support."""
+
+    claims = [f"place not in tool results: {name}" for name in invented_place_names(text, state)]
+    claims.extend(_forecast_conflicts(text, state))
+    return claims
 
 
 def ground_recommendation(
@@ -141,25 +278,26 @@ def ground_recommendation(
     """Keep the model text only when it stays on the tool results.
 
     A missing forecast is copied from the weather report. Invented park or
-    trail names get one correction prompt, then those sentences are dropped
-    and the options are rendered from the tool results.
+    trail names, and temperatures, dates, distances, or all-clears the tools
+    did not return, get one correction prompt. If that draft still conflicts,
+    those sentences are dropped and the options are rendered from the tools.
     """
 
     summary = ((state.get("conditions") or {}).get("summary") or "").strip()
-    invented = invented_place_names(text, state)
-    if not invented:
+    problems = ungrounded_claims(text, state)
+    if not problems:
         return _with_forecast_and_length(text, state, summary), "model"
 
     corrected = ""
     if complete is not None:
         try:
-            corrected = complete(_correction(state, text, invented)).strip()
+            corrected = complete(_correction(state, text, problems)).strip()
         except Exception:  # noqa: BLE001 - the tool render is the fallback
             corrected = ""
-    if corrected and not invented_place_names(corrected, state):
+    if corrected and not ungrounded_claims(corrected, state):
         return _with_forecast_and_length(corrected, state, summary), "model"
 
-    cleaned = _without_invented_sentences(corrected or text, invented_place_names(corrected or text, state) or invented)
+    cleaned = _without_problem_sentences(corrected or text, state)
     parts = [part for part in (cleaned, forecast_section(state), _options_block(state)) if part]
     length = (state.get("when") or {}).get("trip_length")
     body = "\n\n".join(parts)
@@ -179,25 +317,213 @@ def _with_forecast_and_length(text: str, state: dict[str, Any], summary: str) ->
 
 
 def _name_allowed(candidate: str, allowed: list[str]) -> bool:
-    cand = candidate.lower()
+    cand = _norm_name(candidate)
     for name in allowed:
-        other = name.lower()
-        if cand == other or cand in other or other in cand:
+        other = _norm_name(name)
+        if not other:
+            continue
+        if cand == other:
+            return True
+        # A longer phrase may name the tool result in full. A shorter phrase
+        # that is only a piece of the tool name is a different place.
+        if len(other.split()) >= 2 and _phrase_in(other, cand):
             return True
     return False
 
 
-def _without_invented_sentences(text: str, invented: list[str]) -> str:
-    if not text or not invented:
-        return (text or "").strip()
+def _without_problem_sentences(text: str, state: dict[str, Any]) -> str:
+    if not text:
+        return ""
     sentences = re.split(r"(?<=[.!?])\s+", text.strip())
-    kept = []
-    for sentence in sentences:
-        lowered = sentence.lower()
-        if any(name.lower() in lowered for name in invented):
-            continue
-        kept.append(sentence)
+    kept = [sentence for sentence in sentences if sentence and not ungrounded_claims(sentence, state)]
     return " ".join(kept).strip()
+
+
+def _place_candidates(text: str) -> list[str]:
+    """Place-like phrases, including lowercase ones, longest span at each suffix."""
+
+    found: list[str] = []
+    for match in _PLACE_SUFFIX.finditer(text or ""):
+        name = _grow_place(text, match.start(), match.group(0))
+        if name and name not in found:
+            found.append(name)
+    longest: list[str] = []
+    for name in found:
+        if any(name != other and _phrase_in(name, other) for other in found):
+            continue
+        longest.append(name)
+    return longest
+
+
+def _grow_place(text: str, suffix_start: int, suffix: str) -> str:
+    words: list[str] = []
+    index = suffix_start
+    while len(words) < 6:
+        cursor = index
+        while cursor > 0 and text[cursor - 1] in " \t":
+            cursor -= 1
+        if cursor == index or cursor == 0:
+            break
+        word_start = cursor
+        while word_start > 0 and re.match(r"[A-Za-z0-9'’.-]", text[word_start - 1]):
+            word_start -= 1
+        if word_start == cursor:
+            break
+        word = text[word_start:cursor]
+        if not re.match(r"[A-Za-z]", word) or word.lower() in _STOP_WORDS:
+            break
+        words.append(word)
+        index = word_start
+    if not words:
+        return ""
+    return " ".join(reversed(words)) + " " + suffix
+
+
+def _forecast_conflicts(text: str, state: dict[str, Any]) -> list[str]:
+    facts = _tool_fact_text(state)
+    summary = ((state.get("conditions") or {}).get("summary") or "").strip()
+    conflicts: list[str] = []
+    for claim in _temperature_conflicts(text, summary):
+        conflicts.append(claim)
+    for claim in _date_conflicts(text, state):
+        conflicts.append(claim)
+    for claim in _measure_conflicts(text, facts):
+        conflicts.append(claim)
+    for claim in _all_clear_conflicts(text, facts):
+        conflicts.append(claim)
+    return conflicts
+
+
+def _tool_fact_text(state: dict[str, Any]) -> str:
+    conditions = state.get("conditions") or {}
+    parts = [conditions.get("summary") or "", *(conditions.get("safety_notes") or []), *(conditions.get("alerts") or [])]
+    for park in (state.get("parks") or {}).get("parks") or []:
+        parts.extend(
+            [
+                park.get("name") or "",
+                park.get("description") or "",
+                *(park.get("trails") or []),
+                *(park.get("alerts") or []),
+            ]
+        )
+    when = state.get("when") or {}
+    if isinstance(when, dict) and when.get("label"):
+        parts.append(str(when["label"]))
+    return "\n".join(str(part) for part in parts if part)
+
+
+def _temperature_conflicts(text: str, summary: str) -> list[str]:
+    claimed = _temperatures_c(text)
+    if not claimed:
+        return []
+    allowed = [celsius for _original, celsius in _temperatures_c(summary)]
+    conflicts = []
+    for original, celsius in claimed:
+        if any(abs(celsius - known) <= 1.5 for known in allowed):
+            continue
+        conflicts.append(f"temperature not in the forecast: {original}")
+    return conflicts
+
+
+def _temperatures_c(text: str) -> list[tuple[str, float]]:
+    found = []
+    for match in _TEMPERATURE.finditer(text or ""):
+        value = float(match.group(1))
+        unit = match.group(2).upper()
+        celsius = value if unit == "C" else (value - 32) * 5 / 9
+        found.append((match.group(0), celsius))
+    return found
+
+
+def _date_conflicts(text: str, state: dict[str, Any]) -> list[str]:
+    window = _requested_window(state)
+    if window is None:
+        return []
+    start, end = window
+    allowed_days = set()
+    cursor = start
+    while cursor <= end:
+        allowed_days.add(cursor.weekday())
+        cursor += timedelta(days=1)
+    conflicts = []
+    for spoken, found in _mentioned_dates(text, start.year):
+        if found < start or found > end:
+            conflicts.append(f"date outside the requested trip: {spoken}")
+    for match in _WEEKDAY.finditer(text or ""):
+        if _WEEKDAY_INDEX[match.group(1).lower()] not in allowed_days:
+            conflicts.append(f"weekday outside the requested trip: {match.group(1)}")
+    return conflicts
+
+
+def _requested_window(state: dict[str, Any]) -> tuple[date, date] | None:
+    when = state.get("when") or {}
+    if not isinstance(when, dict) or not when.get("start"):
+        return None
+    try:
+        start = date.fromisoformat(str(when["start"]))
+        end = date.fromisoformat(str(when.get("end") or when["start"]))
+    except ValueError:
+        return None
+    if end < start:
+        end = start
+    return start, end
+
+
+def _mentioned_dates(text: str, default_year: int) -> list[tuple[str, date]]:
+    found: list[tuple[str, date]] = []
+    for match in _ISO_DATE.finditer(text or ""):
+        try:
+            found.append((match.group(1), date.fromisoformat(match.group(1))))
+        except ValueError:
+            continue
+    for pattern in (_MONTH_DAY, _DAY_MONTH):
+        for match in pattern.finditer(text or ""):
+            month = _MONTH_INDEX[match.group("month").lower()]
+            day_number = int(match.group("day"))
+            year = int(match.group("year")) if match.group("year") else default_year
+            try:
+                found.append((match.group(0), date(year, month, day_number)))
+            except ValueError:
+                continue
+    return found
+
+
+def _measure_conflicts(text: str, facts: str) -> list[str]:
+    allowed = set(_measures(facts))
+    conflicts = []
+    for spoken, measure in _measures(text):
+        if measure not in allowed:
+            conflicts.append(f"distance or elevation not in the tool results: {spoken}")
+    return conflicts
+
+
+def _measures(text: str) -> list[tuple[str, tuple[float, str]]]:
+    found = []
+    for match in _MEASURE.finditer(text or ""):
+        number = float(match.group(1).replace(",", ""))
+        family = _UNIT_FAMILY[match.group(2).lower()]
+        found.append((match.group(0), (number, family)))
+    return found
+
+
+def _all_clear_conflicts(text: str, facts: str) -> list[str]:
+    conflicts = []
+    fact_text = facts.lower()
+    for match in _ALL_CLEAR.finditer(text or ""):
+        phrase = match.group(0).lower()
+        if phrase not in fact_text:
+            conflicts.append(f"all-clear the tools did not state: {match.group(0)}")
+    return conflicts
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+
+def _phrase_in(short: str, long: str) -> bool:
+    if not short or not long:
+        return False
+    return re.search(rf"(?<!\w){re.escape(short)}(?!\w)", long) is not None
 
 
 def _options_block(state: dict[str, Any]) -> str:
@@ -208,14 +534,17 @@ def _options_block(state: dict[str, Any]) -> str:
     return brief.split("\nOptions\n", 1)[1].strip()
 
 
-def _correction(state: dict[str, Any], previous: str, invented: list[str]) -> str:
+def _correction(state: dict[str, Any], previous: str, problems: list[str]) -> str:
     names = ", ".join(allowed_place_names(state)) or "none"
     summary = ((state.get("conditions") or {}).get("summary") or "Weather was not available.").strip()
+    reasons = "\n".join(f"- {problem}" for problem in problems)
     return (
         f"{render_brief(state)}\n\n"
-        "Rewrite the recommendation. The previous draft was rejected because it named "
-        f"places the tools did not return: {', '.join(invented)}.\n"
+        "Rewrite the recommendation. The previous draft was rejected:\n"
+        f"{reasons}\n"
         f"Use only these parks and trails: {names}.\n"
+        "Do not add a temperature, distance, date, or all-clear that the brief does not state. "
+        "A missing alert is not an all-clear.\n"
         f"Include this forecast verbatim: {summary}\n\n"
         f"Rejected draft:\n{previous}"
     )

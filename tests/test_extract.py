@@ -87,3 +87,64 @@ def test_next_weekday_and_overnight():
     assert found["place"] == "Moab"
     assert found["when"]["start"] == "2026-11-23"
     assert found["when"]["trip_length"] == "overnight"
+
+
+def test_verb_plus_relative_day_is_not_a_place():
+    tomorrow = extract_hike_request("hike tomorrow", today=SUNDAY)
+    assert tomorrow["place"] == ""
+    assert tomorrow["when"]["start"] == "2026-11-16"
+
+    today = extract_hike_request("hike today", today=SUNDAY)
+    assert today["place"] == ""
+    assert today["when"]["start"] == "2026-11-15"
+
+    saturday = extract_hike_request("hike this Saturday", today=SUNDAY)
+    assert saturday["place"] == ""
+    assert saturday["when"]["start"] == "2026-11-21"
+    assert "this Saturday" in saturday["when"]["label"]
+
+
+def test_invalid_named_date_is_not_geocoded_as_hike():
+    found = extract_hike_request("hike on February 30", today=SUNDAY)
+    assert found["place"] == ""
+    assert found["when"]["invalid"]
+
+
+def test_invalid_iso_date_does_not_raise():
+    found = extract_hike_request("hike on 2026-02-30", today=SUNDAY)
+    assert found["place"] == ""
+    assert found["when"]["invalid"] == "2026-02-30"
+    leap = extract_hike_request("hike on 2026-13-01", today=SUNDAY)
+    assert leap["when"]["invalid"] == "2026-13-01"
+
+
+def test_numeric_and_day_month_dates_leave_a_clean_place():
+    numeric = extract_hike_request("11/15/2026 near Boulder", today=date(2026, 11, 1))
+    assert numeric["place"] == "Boulder"
+    assert numeric["when"]["start"] == "2026-11-15"
+
+    written = extract_hike_request("15 November 2026 near Boulder", today=date(2026, 11, 1))
+    assert written["place"] == "Boulder"
+    assert written["when"]["start"] == "2026-11-15"
+
+
+def test_non_leap_day_is_invalid_and_a_leap_day_is_kept():
+    missed = extract_hike_request("Feb 29 near Moab", today=date(2026, 11, 15))
+    assert missed["place"] == "Moab"
+    assert missed["when"]["invalid"]
+
+    kept = extract_hike_request("Feb 29 near Moab", today=date(2024, 1, 1))
+    assert kept["place"] == "Moab"
+    assert kept["when"]["start"] == "2024-02-29"
+
+
+def test_named_date_without_on_is_removed_from_the_place():
+    found = extract_hike_request("Boulder May 5", today=SUNDAY)
+    assert found["place"] == "Boulder"
+    assert found["when"]["start"] == "2027-05-05"
+
+
+def test_bare_weekday_is_not_left_as_the_place():
+    found = extract_hike_request("Saturday near Boulder", today=SUNDAY)
+    assert found["place"] == "Boulder"
+    assert found["when"]["start"] == "2026-11-21"
