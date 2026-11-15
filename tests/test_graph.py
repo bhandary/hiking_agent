@@ -210,3 +210,24 @@ def test_invented_parks_are_replaced_with_tool_results():
     assert "Rocky Mountain National Park" in state["recommendation"]
     assert "Partly cloudy" in state["recommendation"]
     assert state["planner"] == "grounded"
+
+
+def test_geocoding_failure_is_not_reported_as_an_unknown_place():
+    def fail(_place):
+        raise AssertionError("parks and weather should not run when geocoding failed")
+
+    graph = build_graph(
+        lambda _query: {
+            "latitude": None,
+            "longitude": None,
+            "label": "Boulder",
+            "source": "error",
+            "note": "Geocoding failed (TimeoutError).",
+        },
+        fail,
+        fail,
+        lambda _brief: "should not be called",
+    )
+    state = graph.invoke({"query": "Boulder", "errors": [], "trace": []})
+    assert state["recommendation"] == "Geocoding failed (TimeoutError)."
+    assert state["planner"] == "stopped"
