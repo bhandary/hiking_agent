@@ -117,8 +117,12 @@ def test_mcp_forecast_is_preferred_over_direct_apis(settings):
             return {"ok": True, "text": "No active alerts.", "structured": None, "error": None}
         raise AssertionError(tool)
 
-    def get_json(*_args, **_kwargs):
-        raise AssertionError("direct API should not run when MCP succeeds")
+    def get_json(url, **_kwargs):
+        if "open-meteo.com" in url:
+            raise AssertionError("open-meteo should not run when MCP succeeds")
+        if "weather.gov" in url:
+            return {}
+        raise AssertionError(url)
 
     report = hiking_conditions(PLACE, settings=settings, mcp_call=mcp_call, get_json=get_json, today=TODAY)
     assert report["source"] == "weather-mcp"
@@ -225,3 +229,132 @@ def test_clipping_keeps_the_requested_day():
     assert report is not None
     assert day.isoformat() in report["summary"]
     assert len(report["summary"]) <= 2500
+    assert "Earlier day" not in report["summary"]
+
+
+SATURDAY = date(2026, 11, 21)
+_SHORT_FORECAST = """Saturday
+Sunny, high 69 F.
+Saturday Night
+Clear, low 40 F.
+Sunday
+This Afternoon
+52 F.
+Monday
+Thunderstorms.
+"""
+
+
+def test_structured_periods_keep_the_requested_day_and_night():
+    assert len(_SHORT_FORECAST) < 2500
+    report = conditions_from_mcp(
+        {
+            "ok": True,
+            "text": _SHORT_FORECAST,
+            "structured": {
+                "periods": [
+                    {
+                        "name": "Saturday Night",
+                        "startTime": "2026-11-21T18:00:00-08:00",
+                        "isDaytime": False,
+                        "temperature": 40,
+                        "temperatureUnit": "F",
+                        "shortForecast": "Clear",
+                    },
+                    {
+                        "name": "Saturday",
+                        "startTime": "2026-11-21T06:00:00-08:00",
+                        "isDaytime": True,
+                        "temperature": 69,
+                        "temperatureUnit": "F",
+                        "shortForecast": "Sunny",
+                    },
+                    {
+                        "name": "This Afternoon",
+                        "startTime": "2026-11-22T12:00:00-08:00",
+                        "isDaytime": True,
+                        "temperature": 52,
+                        "temperatureUnit": "F",
+                        "shortForecast": "Mostly Sunny",
+                    },
+                    {
+                        "name": "Monday",
+                        "startTime": "2026-11-16T09:00:00-08:00",
+                        "isDaytime": True,
+                        "temperature": 55,
+                        "temperatureUnit": "F",
+                        "shortForecast": "Thunderstorms",
+                    },
+                ]
+            },
+        },
+        {"ok": True, "text": "No active alerts."},
+        day=SATURDAY,
+    )
+    summary = report["summary"]
+    assert summary.startswith("Forecast for 2026-11-21 (Saturday)")
+    assert summary.index("Saturday:") < summary.index("Saturday Night:")
+    assert "69 F" in summary
+    assert "Sunny" in summary
+    assert "Clear" in summary
+    assert "52" not in summary
+    assert "Thunderstorm" not in summary
+    assert "This Afternoon" not in summary
+
+
+def test_short_forecast_text_keeps_the_first_weekday_heading_through_night():
+    """A forecast under 2500 characters still drops the other days.
+
+    The daytime heading is first. A last-match search would start at Saturday
+    Night and lose the 69 F daytime period.
+    """
+
+    assert len(_SHORT_FORECAST) < 2500
+    report = conditions_from_mcp(
+        {"ok": True, "text": _SHORT_FORECAST, "structured": None},
+        {"ok": True, "text": "No active alerts."},
+        day=SATURDAY,
+    )
+    summary = report["summary"]
+    assert summary.startswith("Forecast for 2026-11-21 (Saturday)")
+    assert "69 F" in summary
+    assert summary.index("69 F") < summary.index("Saturday Night")
+    assert "Saturday Night" in summary
+    assert "52" not in summary
+    assert "Thunderstorm" not in summary
+    assert report["risk"] == "ok"
+
+
+def test_risk_is_scored_on_the_requested_day_only():
+    report = conditions_from_mcp(
+        {
+            "ok": True,
+            "text": "Monday: Thunderstorms. Saturday: Sunny, 69 F.",
+            "structured": {
+                "periods": [
+                    {
+                        "name": "Monday",
+                        "startTime": "2026-11-16T09:00:00-08:00",
+                        "isDaytime": True,
+                        "temperature": 55,
+                        "temperatureUnit": "F",
+                        "shortForecast": "Thunderstorms",
+                    },
+                    {
+                        "name": "Saturday",
+                        "startTime": "2026-11-21T06:00:00-08:00",
+                        "isDaytime": True,
+                        "temperature": 69,
+                        "temperatureUnit": "F",
+                        "shortForecast": "Sunny",
+                    },
+                ]
+            },
+        },
+        {"ok": True, "text": "No active alerts."},
+        day=SATURDAY,
+    )
+    assert report["risk"] == "ok"
+    assert report["suitable"] is True
+    assert "Thunderstorm" not in report["summary"]
+    assert "Sunny" in report["summary"]

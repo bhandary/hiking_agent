@@ -6,6 +6,7 @@ import pytest
 
 from hike_agent.agents.location import resolve_place, resolve_place_tool
 from hike_agent.config import get_settings
+from hike_agent.services.nps import parks_from_find_text
 from hike_agent.services.states import state_code
 
 
@@ -37,6 +38,146 @@ def test_geocode_uses_the_first_hit_with_coordinates(settings):
     assert place["longitude"] == pytest.approx(-105.27055)
     assert place["state_code"] == "CO"
     assert place["label"] == "Boulder, Colorado, United States"
+
+
+YOSEMITE_PARK = {
+    "fullName": "Yosemite National Park",
+    "parkCode": "yose",
+    "designation": "National Park",
+    "states": "CA",
+    "latitude": 37.84883288,
+    "longitude": -119.5571873,
+}
+
+
+def test_yosemite_prefers_the_national_park_over_the_first_geocode_hit(settings):
+    def get_json(url, **_kwargs):
+        assert "geocoding-api.open-meteo.com" in url
+        return {
+            "results": [
+                {
+                    "name": "Yosemite",
+                    "latitude": 37.34674,
+                    "longitude": -84.82467,
+                    "admin1": "Kentucky",
+                    "country": "United States",
+                    "country_code": "US",
+                    "feature_code": "PPL",
+                    "population": None,
+                },
+                {
+                    "name": "Yosemite Valley",
+                    "latitude": 37.74075,
+                    "longitude": -119.57788,
+                    "admin1": "California",
+                    "country": "United States",
+                    "country_code": "US",
+                    "feature_code": "PPL",
+                    "population": 1035,
+                },
+            ]
+        }
+
+    def search_parks(_query):
+        return [
+            YOSEMITE_PARK,
+            {
+                "fullName": "Devils Postpile National Monument",
+                "parkCode": "depo",
+                "designation": "National Monument",
+                "states": "CA",
+                "latitude": 37.629,
+                "longitude": -119.085,
+            },
+        ]
+
+    place = resolve_place("Yosemite", settings=settings, get_json=get_json, search_parks=search_parks)
+    assert place["source"] == "nps"
+    assert place["name"] == "Yosemite National Park"
+    assert place["state_code"] == "CA"
+    assert place["state"] == "California"
+    assert place["latitude"] == pytest.approx(37.84883288)
+    assert place["longitude"] == pytest.approx(-119.5571873)
+
+
+def test_geocode_ranks_hits_instead_of_taking_the_first(settings):
+    def yosemite_hits(url, **_kwargs):
+        assert "geocoding-api.open-meteo.com" in url
+        return {
+            "results": [
+                {
+                    "name": "Yosemite",
+                    "latitude": 37.34674,
+                    "longitude": -84.82467,
+                    "admin1": "Kentucky",
+                    "country_code": "US",
+                    "country": "United States",
+                    "feature_code": "PPL",
+                    "population": 0,
+                },
+                {
+                    "name": "Yosemite Lakes",
+                    "latitude": 37.19106,
+                    "longitude": -119.77265,
+                    "admin1": "California",
+                    "country_code": "US",
+                    "country": "United States",
+                    "feature_code": "PPL",
+                    "population": 4952,
+                },
+            ]
+        }
+
+    populated = resolve_place("Yosemite", settings=settings, get_json=yosemite_hits, search_parks=lambda _query: [])
+    assert populated["state_code"] == "CA"
+    assert populated["longitude"] == pytest.approx(-119.77265)
+
+    def gateway_hits(url, **_kwargs):
+        assert "geocoding-api.open-meteo.com" in url
+        return {
+            "results": [
+                {
+                    "name": "El Portal",
+                    "latitude": 37.35,
+                    "longitude": -84.82,
+                    "admin1": "Kentucky",
+                    "country_code": "US",
+                    "feature_code": "PPL",
+                    "population": 200,
+                },
+                {
+                    "name": "El Portal",
+                    "latitude": 37.6747,
+                    "longitude": -119.7843,
+                    "admin1": "California",
+                    "country_code": "US",
+                    "feature_code": "PPL",
+                    "population": 200,
+                },
+            ]
+        }
+
+    nearest = resolve_place(
+        "El Portal",
+        settings=settings,
+        get_json=gateway_hits,
+        search_parks=lambda _query: [YOSEMITE_PARK],
+    )
+    assert nearest["source"] == "open-meteo"
+    assert nearest["state_code"] == "CA"
+    assert nearest["longitude"] == pytest.approx(-119.7843)
+
+
+def test_hosted_park_markdown_keeps_coordinates():
+    parks = parks_from_find_text(
+        "### Yosemite National Park\n"
+        "**parkCode:** yose | **National Park** | **States:** CA\n"
+        "A valley.\n"
+        "**Coordinates:** 37.84883288, -119.5571873\n"
+    )
+    assert parks[0]["parkCode"] == "yose"
+    assert parks[0]["latitude"] == pytest.approx(37.84883288)
+    assert parks[0]["states"] == "CA"
 
 
 def test_unknown_place_has_no_coordinates(settings):

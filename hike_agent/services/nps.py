@@ -6,7 +6,11 @@ are included now because the planner needs closure and hazard notes.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any, Callable
+
+import requests
 
 from hike_agent.services.geo import haversine_km
 
@@ -182,3 +186,127 @@ def fetch_parks_bundle(
         park["trails"] = hike_titles(things.get("data") or []) or park["trails"]
         park["alerts"] = alert_lines(alerts.get("data") or [])
     return selected
+
+
+_PARK_HEADING = re.compile(r"^### (?P<name>.+)$", re.MULTILINE)
+_PARK_META = re.compile(
+    r"\*\*parkCode:\*\*\s*(?P<code>\w+)\s*\|\s*\*\*(?P<designation>[^*]+)\*\*\s*\|\s*\*\*States:\*\*\s*(?P<states>[A-Z]{2}(?:,\s*[A-Z]{2})*)"
+)
+_PARK_COORDINATES = re.compile(
+    r"\*\*Coordinates:\*\*\s*(?P<lat>-?\d+(?:\.\d+)?),\s*(?P<lon>-?\d+(?:\.\d+)?)"
+)
+
+
+def parks_from_find_text(text: str) -> list[dict[str, Any]]:
+    """Parks from the hosted NPS MCP's markdown, including coordinates."""
+
+    parks: list[dict[str, Any]] = []
+    for chunk in re.split(r"\n(?=### )", text or ""):
+        heading = _PARK_HEADING.search(chunk)
+        if not heading:
+            continue
+        meta = _PARK_META.search(chunk)
+        coords = _PARK_COORDINATES.search(chunk)
+        parks.append(
+            {
+                "fullName": heading.group("name").strip(),
+                "parkCode": meta.group("code") if meta else None,
+                "designation": meta.group("designation").strip() if meta else "",
+                "states": meta.group("states") if meta else "",
+                "latitude": float(coords.group("lat")) if coords else None,
+                "longitude": float(coords.group("lon")) if coords else None,
+            }
+        )
+    return parks
+
+
+def search_parks_by_name(
+    query: str,
+    *,
+    mcp_url: str = "",
+    mcp_enabled: bool = False,
+    api_key: str = "",
+    get_json: GetJson | None = None,
+    timeout: float = 12,
+    user_agent: str = "hike-agent/0.1",
+) -> list[dict[str, Any]]:
+    """Find NPS parks by name. The hosted MCP works without an API key."""
+
+    text = (query or "").strip()
+    if not text:
+        return []
+    parks: list[dict[str, Any]] = []
+    if mcp_enabled and mcp_url:
+        try:
+            parks = parks_from_find_text(_hosted_find_parks(mcp_url, text, timeout=timeout, user_agent=user_agent))
+        except (requests.RequestException, ValueError, TypeError):
+            parks = []
+    if parks:
+        return parks
+    if not api_key or get_json is None:
+        return []
+    try:
+        payload = get_json(
+            f"{NPS_BASE}/parks",
+            params={"q": text, "limit": 10, "api_key": api_key},
+            timeout=timeout,
+            user_agent=user_agent,
+        )
+    except (requests.RequestException, ValueError, TypeError):
+        return []
+    found: list[dict[str, Any]] = []
+    for item in (payload or {}).get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        found.append(
+            {
+                "fullName": item.get("fullName") or item.get("name"),
+                "parkCode": item.get("parkCode"),
+                "designation": item.get("designation") or "",
+                "states": item.get("states") or "",
+                "latitude": _float_or_none(item.get("latitude")),
+                "longitude": _float_or_none(item.get("longitude")),
+            }
+        )
+    return found
+
+
+def _hosted_find_parks(url: str, query: str, *, timeout: float, user_agent: str) -> str:
+    response = requests.post(
+        url,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "nps_find_parks", "arguments": {"query": query, "limit": 8}},
+        },
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "User-Agent": user_agent,
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    body = response.text
+    payload: dict[str, Any] | None = None
+    if body.lstrip().startswith("{"):
+        payload = response.json()
+    else:
+        for line in body.splitlines():
+            if not line.startswith("data:"):
+                continue
+            try:
+                event = json.loads(line[5:].strip())
+            except json.JSONDecodeError:
+                continue
+            if isinstance(event, dict) and "result" in event:
+                payload = event
+    if not payload:
+        return ""
+    result = payload.get("result") or {}
+    parts: list[str] = []
+    for block in result.get("content") or []:
+        if isinstance(block, dict) and block.get("text"):
+            parts.append(str(block["text"]))
+    return "\n".join(parts)

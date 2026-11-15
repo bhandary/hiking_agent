@@ -1,8 +1,9 @@
 """Grounding checks: invented places, weather, dates, distances, and follow-ups."""
 
+import copy
 from datetime import date
 
-from hike_agent.agents.planner import ground_recommendation, invented_place_names
+from hike_agent.agents.planner import PLANNER_SYSTEM, ground_recommendation, invented_place_names, render_brief
 from hike_agent.cli import answer_follow_up, plan_hike
 from hike_agent.coordinates import parse_coordinates
 from hike_agent.extract import INVALID_DATE, extract_hike_request
@@ -48,6 +49,71 @@ def test_lowercase_and_unsuffixed_places_are_not_published():
     assert pond_how == "grounded"
     assert "Sky Pond" not in pond
     assert invented_place_names("Hike Sky Pond.", STATE) == ["Sky Pond"]
+
+
+def test_a_longer_phrase_around_a_real_trail_name_is_rejected():
+    assert invented_place_names("Hike the Imaginary Bear Lake Trail.", STATE) == ["Imaginary Bear Lake Trail"]
+    assert invented_place_names("Bear Lake Trail!", STATE) == []
+    assert invented_place_names("bear-lake trail", STATE) == []
+    grounded, how, calls = _reject(
+        "Hike the Imaginary Bear Lake Trail at dawn. Partly cloudy, 12 C, 20% chance of rain."
+    )
+    assert calls == 1
+    assert how == "grounded"
+    assert "Imaginary Bear Lake Trail" not in grounded
+    assert "Bear Lake Trail" in grounded
+
+
+def test_a_conflicting_risk_sentence_is_replaced_from_conditions():
+    grounded, how, calls = _reject(
+        "Hike Bear Lake Trail. Risk: unsafe. Partly cloudy, 12 C, 20% chance of rain."
+    )
+    assert calls == 1
+    assert how == "grounded"
+    assert "Risk: unsafe" not in grounded
+    assert "Risk: ok." in grounded
+    assert "Bear Lake Trail" in grounded
+
+
+def test_numbers_and_dates_copied_from_tool_results_are_kept():
+    state = copy.deepcopy(STATE)
+    state["parks"]["parks"][0]["description"] = "The range runs 300 miles. Established September 14."
+    text = (
+        "The range runs 300 miles. Established September 14. "
+        "Hike Bear Lake Trail. Partly cloudy, 12 C, 20% chance of rain."
+    )
+    grounded, how = ground_recommendation(text, state, lambda _prompt: text)
+    assert how == "model"
+    assert "300 miles" in grounded
+    assert "September 14" in grounded
+
+
+def test_a_future_unsafe_day_is_not_called_today():
+    state = copy.deepcopy(STATE)
+    state["when"] = {"label": "Saturday (2027-04-10)", "start": "2027-04-10", "end": "2027-04-10"}
+    state["conditions"] = {
+        "summary": "Thunderstorms, high 60 F.",
+        "risk": "unsafe",
+        "safety_notes": [],
+        "alerts": [],
+    }
+    brief = render_brief(state)
+    assert "today is a poor day" not in brief.lower()
+    assert "hike today" not in brief.lower()
+    assert "2027-04-10" in brief
+    assert "poor day to hike" in brief.lower()
+    assert "not to hike on the requested date" in PLANNER_SYSTEM
+    assert "Do not say to hike today" in PLANNER_SYSTEM
+
+    grounded, how = ground_recommendation(
+        "It is not recommended to hike today. Hike Bear Lake Trail.",
+        state,
+        lambda _prompt: "It is not recommended to hike today. Hike Bear Lake Trail.",
+    )
+    assert how == "grounded"
+    assert "hike today" not in grounded.lower()
+    assert "today" not in grounded.lower()
+    assert "2027-04-10" in grounded
 
 
 def test_a_shorter_trail_name_is_not_the_tool_trail():
