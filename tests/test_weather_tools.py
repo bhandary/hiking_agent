@@ -15,10 +15,10 @@ TODAY = date(2026, 11, 14)
 PLACE = {"latitude": 40.015, "longitude": -105.271, "label": "Boulder, Colorado"}
 
 
-def _hourly(*, code: int = 2, precip: float = 10, temp: float = 10, outlier_hour: int | None = 7):
+def _hourly(*, code: int = 2, precip: float = 10, temp: float = 10, outlier_hour: int | None = 7, day: date = TODAY):
     times, temps, precips, codes = [], [], [], []
     for hour in range(24):
-        times.append(f"{TODAY.isoformat()}T{hour:02d}:00")
+        times.append(f"{day.isoformat()}T{hour:02d}:00")
         if hour == outlier_hour:
             temps.append(100)
             precips.append(0)
@@ -156,6 +156,20 @@ def test_mcp_alert_text_can_mark_a_forecast_unsafe():
     )
     assert report is not None
     assert report["risk"] == "unsafe"
+
+
+def test_a_future_day_is_labeled_with_its_date():
+    target = date.today() + timedelta(days=6)
+    summary = summarize_daylight(_hourly(day=target), today=target)
+    assert summary["ok"] is True
+    assert summary["summary"].startswith(f"Forecast for {target.isoformat()}")
+    assert "Today's forecast" not in summary["summary"]
+
+
+def test_today_keeps_the_today_label():
+    target = date.today()
+    summary = summarize_daylight(_hourly(day=target), today=target)
+    assert summary["summary"].startswith("Today's forecast")
 
 
 def test_a_date_more_than_a_week_out_is_still_requested(settings):
