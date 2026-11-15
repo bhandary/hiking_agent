@@ -1,0 +1,33 @@
+[project]
+name = "hike-agent"
+version = "0.1.0"
+description = "Multi-agent hike planner built with LangGraph, with MCP park and weather tools and direct API fallbacks."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langchain[mcp]>=1.5.0,<2",
+    "langgraph>=1.2.22,<2",
+    "langchain-openai>=1.0,<2",
+    "langgraph-cli[inmem]>=0.4.43,<0.5",
+    "fastapi>=0.115",
+    "requests>=2.32",
+    "geocoder>=1.38",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+hike-agent = "hike_agent.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["hike_agent*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

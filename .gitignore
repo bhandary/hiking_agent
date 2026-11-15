@@ -2,3 +2,15 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Secrets
+.env
+
+# LangGraph dev server cache
+.langgraph_api/

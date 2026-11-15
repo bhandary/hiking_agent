@@ -1,0 +1,10 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "hike_planner": "./hike_agent/chat_graph.py:graph"
+  },
+  "env": ".env",
+  "http": {
+    "app": "./hike_agent/http_app.py:app"
+  }
+}
