@@ -1,6 +1,11 @@
-"""The planner must not keep place names the tools did not return."""
+"""The planner must not keep facts the tools did not return."""
 
-from hike_agent.agents.planner import invented_place_names
+from hike_agent.agents.planner import (
+    contradicted_risks,
+    ground_recommendation,
+    invented_place_names,
+    invented_temperatures,
+)
 
 SUMMARY = (
     "Today's forecast: Partly cloudy, with an average temperature of 10°C "
@@ -38,3 +43,30 @@ def test_a_lowercase_invented_trail_is_rejected():
 
 def test_a_generic_national_park_phrase_is_not_treated_as_invented():
     assert invented_place_names("Visit National Park this weekend.", _state()) == []
+
+
+def test_a_temperature_missing_from_the_forecast_is_rejected():
+    assert invented_temperatures("It will be 95°F by noon.", _state()) == ["95°F"]
+    assert invented_temperatures("The forecast average is 10°C.", _state()) == []
+
+
+def test_a_contradicted_risk_line_is_rejected():
+    assert contradicted_risks("Risk: unsafe. Stay home.", _state()) == ["Risk: unsafe"]
+    assert contradicted_risks("Risk: ok.", _state()) == []
+
+
+def test_grounding_drops_invented_facts_and_keeps_the_forecast():
+    draft = "It will be 95°F. Hike Imaginary Peak Trail. Risk: unsafe."
+
+    def complete(_brief: str) -> str:
+        return draft
+
+    body, how = ground_recommendation(draft, _state(), complete)
+    assert how == "grounded"
+    assert "95°F" not in body
+    assert "Imaginary Peak Trail" not in body
+    assert "Risk: unsafe" not in body
+    assert "10°C" in body
+    assert "Risk: ok" in body
+    assert "Bear Lake Trail" in body
+    assert "day hike" in body.lower()

@@ -29,6 +29,8 @@ _SUFFIX_WORD = re.compile(
     re.IGNORECASE,
 )
 _PREV_WORD = re.compile(r"([A-Za-z][\w'’.-]*)\s+$")
+_TEMPERATURE = re.compile(r"-?\d+(?:\.\d+)?\s*°\s*[cCfF]")
+_RISK_CLAIM = re.compile(r"\brisk\s*:\s*(ok|caution|unsafe)\b", re.IGNORECASE)
 # Words that can sit inside a place name. "and" starts a second name, so it stops the walk.
 _CONNECTORS = frozenset({"of", "the", "de", "la", "del", "du"})
 _WALK_STOP = frozenset({
@@ -189,7 +191,12 @@ def _distinctive(tokens: list[str]) -> list[str]:
 
 
 def _place_candidates(text: str) -> list[str]:
-    """Place-like phrases, without the sentence words that sit in front of them."""
+    """Place-like phrases, without the sentence words that sit in front of them.
+
+    The walk stops at a verb or preposition, so ``Hike Bear Lake Trail`` yields
+    ``Bear Lake Trail`` and ``Imaginary Bear Lake Trail`` keeps the extra word.
+    Lowercase names are included; a title-case requirement missed those.
+    """
 
     names: list[str] = []
     for match in _SUFFIX_WORD.finditer(text or ""):
@@ -219,10 +226,7 @@ def _place_candidates(text: str) -> list[str]:
 
 
 def invented_place_names(text: str, state: dict[str, Any]) -> list[str]:
-    """Park or trail names in ``text`` that no tool returned.
-
-    Lowercase names are included. A title-case requirement missed those.
-    """
+    """Park or trail names in ``text`` that no tool returned."""
 
     allowed = allowed_place_names(state)
     invented: list[str] = []
@@ -232,6 +236,37 @@ def invented_place_names(text: str, state: dict[str, Any]) -> list[str]:
         if name not in invented and not _name_allowed(name, allowed):
             invented.append(name)
     return invented
+
+
+def invented_temperatures(text: str, state: dict[str, Any]) -> list[str]:
+    """Degree temperatures in ``text`` that are not in the looked-up forecast."""
+
+    compact = re.sub(r"\s+", "", _forecast_summary(state).lower())
+    found: list[str] = []
+    for match in _TEMPERATURE.finditer(text or ""):
+        token = re.sub(r"\s+", "", match.group(0).lower())
+        shown = match.group(0).strip()
+        if token not in compact and shown not in found:
+            found.append(shown)
+    return found
+
+
+def contradicted_risks(text: str, state: dict[str, Any]) -> list[str]:
+    """``Risk:`` lines that disagree with the weather report."""
+
+    actual = ((state.get("conditions") or {}).get("risk") or "").strip().lower()
+    if actual not in {"ok", "caution", "unsafe"}:
+        return []
+    found: list[str] = []
+    for match in _RISK_CLAIM.finditer(text or ""):
+        shown = match.group(0).strip()
+        if match.group(1).lower() != actual and shown not in found:
+            found.append(shown)
+    return found
+
+
+def _ungrounded(text: str, state: dict[str, Any]) -> list[str]:
+    return invented_place_names(text, state) + invented_temperatures(text, state) + contradicted_risks(text, state)
 
 
 def ground_recommendation(
@@ -246,21 +281,21 @@ def ground_recommendation(
     and the options are rendered from the tool results.
     """
 
-    summary = ((state.get("conditions") or {}).get("summary") or "").strip()
-    invented = invented_place_names(text, state)
-    if not invented:
+    summary = _forecast_summary(state)
+    problems = _ungrounded(text, state)
+    if not problems:
         return _with_forecast_and_length(text, state, summary), "model"
 
     corrected = ""
     if complete is not None:
         try:
-            corrected = complete(_correction(state, text, invented)).strip()
+            corrected = complete(_correction(state, text, problems)).strip()
         except Exception:  # noqa: BLE001 - the tool render is the fallback
             corrected = ""
-    if corrected and not invented_place_names(corrected, state):
+    if corrected and not _ungrounded(corrected, state):
         return _with_forecast_and_length(corrected, state, summary), "model"
 
-    cleaned = _without_invented_sentences(corrected or text, invented_place_names(corrected or text, state) or invented)
+    cleaned = _without_invented_sentences(corrected or text, _ungrounded(corrected or text, state) or problems)
     parts = [part for part in (cleaned, forecast_section(state), _options_block(state)) if part]
     length = (state.get("when") or {}).get("trip_length")
     body = "\n\n".join(parts)
@@ -277,6 +312,10 @@ def _with_forecast_and_length(text: str, state: dict[str, Any], summary: str) ->
     if length and length.lower() not in body.lower():
         body = f"Trip length: {length}\n\n{body}".strip()
     return body
+
+
+def _forecast_summary(state: dict[str, Any]) -> str:
+    return ((state.get("conditions") or {}).get("summary") or "").strip()
 
 
 def _name_allowed(candidate: str, allowed: list[str]) -> bool:
@@ -323,14 +362,16 @@ def _options_block(state: dict[str, Any]) -> str:
     return brief.split("\nOptions\n", 1)[1].strip()
 
 
-def _correction(state: dict[str, Any], previous: str, invented: list[str]) -> str:
+def _correction(state: dict[str, Any], previous: str, problems: list[str]) -> str:
     names = ", ".join(allowed_place_names(state)) or "none"
-    summary = ((state.get("conditions") or {}).get("summary") or "Weather was not available.").strip()
+    summary = _forecast_summary(state) or "Weather was not available."
+    risk = (state.get("conditions") or {}).get("risk") or "unknown"
     return (
         f"{render_brief(state)}\n\n"
-        "Rewrite the recommendation. The previous draft was rejected because it named "
-        f"places the tools did not return: {', '.join(invented)}.\n"
+        "Rewrite the recommendation. The previous draft was rejected because it added "
+        f"facts the tools did not return: {', '.join(problems)}.\n"
         f"Use only these parks and trails: {names}.\n"
-        f"Include this forecast verbatim: {summary}\n\n"
+        f"Include this forecast verbatim: {summary}\n"
+        f"The risk is {risk}. Do not state a different risk or a temperature that is not in the forecast.\n\n"
         f"Rejected draft:\n{previous}"
     )
